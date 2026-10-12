@@ -75,12 +75,12 @@
 - Consumes: Task 2's renderer worker protocol.
 - Produces: `main()` opens the picker without a file argument and preserves quick mode with a file argument. The picker lists `*.md` and `*.markdown` files in the current directory sorted by name. `j`/`k` select, Enter opens, and `q` exits. Preview `j`/`k` moves between image pages; `q` clears the Kitty image and returns to the picker.
 
-- [ ] Add a failing test for picker selection movement and menu/viewer/quit key transitions.
-- [ ] Add a failing test that returning from preview clears the image before the picker redraws.
-- [ ] Run the focused UI tests; confirm they fail before the state transitions are implemented.
-- [ ] Implement the menu and preview in curses on the current terminal; launch and reuse the worker in interactive mode, draw one left-aligned Kitty image page at a time, clear it on return, and terminate the worker on quit. Keep the existing one-file quick view behavior.
-- [ ] Update `README.md` with picker keys and both launch modes.
-- [ ] Run the complete test suite, `python3 -m py_compile mdview.py`, and a Kitty/Xvfb smoke test that opens two files, returns to the picker, and exits without a visible window.
+- [x] Add a failing test for picker selection movement and menu/viewer/quit key transitions.
+- [x] Add a failing test that returning from preview clears the image before the picker redraws.
+- [x] Run the focused UI tests; confirm they fail before the state transitions are implemented.
+- [x] Implement the menu and preview in curses on the current terminal; launch and reuse the worker in interactive mode, draw one left-aligned Kitty image page at a time, clear it on return, and terminate the worker on quit. Keep the existing one-file quick view behavior.
+- [x] Update `README.md` with picker keys and both launch modes.
+- [x] Run the complete test suite, `python3 -m py_compile mdview.py`, and a Kitty/Xvfb smoke test that opens two files, returns to the picker, and exits without a visible window.
 
 ## Completion
 

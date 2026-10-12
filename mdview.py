@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render Markdown through the system WebKitGTK engine and display it in Kitty."""
 import argparse
+import curses
 import html
 import json
 import math
@@ -91,76 +92,6 @@ def render_html(source: str, base: Path) -> str:
             f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
             f'<base href="{html.escape(base.resolve().as_uri() + "/", quote=True)}">'
             f'<style>{STYLE}</style></head><body><main>{body}</main></body></html>')
-
-
-def snapshot(document: Path, target: Path, width: int, boundaries_target: Path) -> None:
-    # This worker runs on a private Xvfb display: no desktop window appears.
-    import gi
-    gi.require_version('Gtk', '3.0')
-    gi.require_version('Gdk', '3.0')
-    gi.require_version('WebKit2', '4.1')
-    from gi.repository import Gdk, GLib, Gtk, WebKit2
-
-    window = Gtk.Window()
-    window.set_default_size(width, 200)
-    view = WebKit2.WebView()
-    # The generated page has no executable Markdown HTML; CSP also blocks page scripts.
-    view.get_settings().set_enable_javascript(True)
-    color = Gdk.RGBA()
-    color.parse('rgba(0,0,0,0)')
-    view.set_background_color(color)
-    window.add(view)
-    failures = []
-
-    def finish(webview, result, _data):
-        try:
-            surface = webview.get_snapshot_finish(result)
-            surface.write_to_png(str(target))
-        except Exception as error:
-            failures.append(str(error))
-        Gtk.main_quit()
-
-    def capture():
-        script = "JSON.stringify([...document.querySelectorAll('h1,h2,h3,h4,h5,h6,p')].map(el => Math.round(el.getBoundingClientRect().top + window.scrollY)))"
-
-        def got_boundaries(webview, result, _data):
-            try:
-                value = webview.evaluate_javascript_finish(result)
-                boundaries_target.write_text(value.to_string(), encoding='utf-8')
-                webview.get_snapshot(WebKit2.SnapshotRegion.FULL_DOCUMENT,
-                                     WebKit2.SnapshotOptions.TRANSPARENT_BACKGROUND,
-                                     None, finish, None)
-            except Exception as error:
-                failures.append(str(error))
-                Gtk.main_quit()
-
-        view.evaluate_javascript(script, -1, None, None, None, got_boundaries, None)
-        return False
-
-    def loaded(_view, event):
-        if event == WebKit2.LoadEvent.FINISHED:
-            # Allow the final layout/paint after resources finish loading.
-            GLib.timeout_add(100, capture)
-
-    def failed(_view, _event, _uri, error):
-        failures.append(error.message)
-        Gtk.main_quit()
-        return True
-
-    def timed_out():
-        failures.append('Rendering timed out after 30 seconds')
-        Gtk.main_quit()
-        return False
-
-    view.connect('load-changed', loaded)
-    view.connect('load-failed', failed)
-    GLib.timeout_add_seconds(30, timed_out)
-    window.show_all()
-    view.load_uri(document.as_uri())
-    Gtk.main()
-    window.destroy()
-    if failures:
-        raise RuntimeError('; '.join(failures))
 
 
 def split_image(image: Path, directory: Path, max_height: int,
@@ -319,50 +250,174 @@ def terminal_size() -> tuple[int, int, int, int]:
     return rows, cols, width, height
 
 
+def markdown_files(directory: Path) -> list[Path]:
+    return sorted((path for path in directory.iterdir()
+                   if path.is_file() and path.suffix.lower() in {'.md', '.markdown'}),
+                  key=lambda path: path.name.casefold())
+
+
+def navigation_action(mode: str, key: str) -> str | None:
+    if mode == 'picker':
+        return {'j': 'down', 'k': 'up', '\n': 'open', '\r': 'open', 'ENTER': 'open', 'q': 'quit'}.get(key)
+    return {'j': 'next', 'k': 'previous', 'q': 'back'}.get(key)
+
+
+def move_selection(index: int, action: str, count: int) -> int:
+    if count < 1:
+        return 0
+    if action == 'down':
+        return min(index + 1, count - 1)
+    if action == 'up':
+        return max(index - 1, 0)
+    return index
+
+
+def clear_kitty_images() -> None:
+    subprocess.run(['kitten', 'icat', '--clear'], check=True, stdout=subprocess.DEVNULL)
+
+
+def restore_picker(screen) -> None:
+    clear_kitty_images()
+    screen.clear()
+    screen.refresh()
+
+
+def show_page(screen, image: Path, page: int, count: int, cols: int, rows: int) -> None:
+    screen.erase()
+    screen.addnstr(0, 0, f' {image.name}  page {page + 1}/{count}   j/k: page   q: files ', max(1, cols - 1))
+    screen.refresh()
+    subprocess.run([
+        'kitten', 'icat', '--align=left', '--background=none', '--fit=none',
+        '--transfer-mode=stream', '--stdin=no', '--z-index=-1',
+        '--place', f'{cols}x{rows - 1}@0x1', str(image),
+    ], check=True)
+
+
+def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int) -> None:
+    files = markdown_files(Path.cwd())
+    selected = 0
+    error = None
+    row_height = max(1, screen_height // rows)
+    page_height = row_height * max(1, rows - 1)
+    mode, pages, current_page = 'picker', [], 0
+
+    while True:
+        if mode == 'picker':
+            screen.erase()
+            screen.addnstr(0, 0, ' mdview   j/k: move   Enter: open   q: quit ', max(1, cols - 1))
+            available = max(0, rows - 2)
+            first = max(0, min(selected - available + 1, len(files) - available))
+            for row, path in enumerate(files[first:first + available], start=1):
+                attr = curses.A_REVERSE if first + row - 1 == selected else 0
+                screen.addnstr(row, 0, path.name, max(1, cols - 1), attr)
+            if not files:
+                screen.addnstr(2, 0, 'No Markdown files in this directory.', max(1, cols - 1))
+            if error:
+                screen.addnstr(rows - 1, 0, error, max(1, cols - 1))
+            screen.refresh()
+            key = screen.getch()
+            key_text = 'ENTER' if key in (10, 13, curses.KEY_ENTER) else chr(key) if 0 <= key < 256 else ''
+            action = navigation_action('picker', key_text)
+            if action == 'quit':
+                return
+            if action in ('up', 'down'):
+                selected = move_selection(selected, action, len(files))
+            elif action == 'open' and files:
+                try:
+                    response = request_render(worker, {
+                        'path': str(files[selected].resolve()), 'width': width,
+                        'page_height': page_height, 'row_height': row_height,
+                    })
+                    if not response.get('ok'):
+                        raise RuntimeError(response.get('error', 'Rendering failed'))
+                    pages = [Path(path) for path in response['strips']]
+                    current_page = 0
+                    mode, error = 'preview', None
+                except (OSError, RuntimeError, ValueError, KeyError) as exception:
+                    error = str(exception)
+        else:
+            show_page(screen, files[selected], current_page, len(pages), cols, rows)
+            key = screen.getch()
+            key_text = chr(key) if 0 <= key < 256 else ''
+            action = navigation_action('preview', key_text)
+            if action == 'back':
+                restore_picker(screen)
+                mode = 'picker'
+            elif action == 'next' and current_page + 1 < len(pages):
+                clear_kitty_images()
+                current_page += 1
+            elif action == 'previous' and current_page > 0:
+                clear_kitty_images()
+                current_page -= 1
+
+
+def close_renderer_worker(worker) -> None:
+    if worker.poll() is None:
+        worker.stdin.close()
+        try:
+            worker.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            worker.terminate()
+            worker.wait(timeout=5)
+    worker.stdout.close()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('file', type=Path, help='Markdown file to render')
+    parser.add_argument('file', nargs='?', type=Path, help='Markdown file to render; omit for the picker')
     parser.add_argument('--output', type=Path, help='Export numbered PNG strips to a directory instead of displaying')
     parser.add_argument('--width', type=int, default=900, help='Export width in pixels (default: 900)')
     parser.add_argument('--strip-height', type=int, default=800, help='Maximum export strip height (default: 800)')
     args = parser.parse_args()
     if args.width < 64 or args.strip_height < 1:
         parser.error('--width must be at least 64 and --strip-height must be positive')
+    if args.output and not args.file:
+        parser.error('--output requires a Markdown file')
+    if not args.file and (not sys.stdin.isatty() or not sys.stdout.isatty()):
+        parser.error('the file picker requires an interactive terminal')
     try:
-        source = args.file.read_text(encoding='utf-8')
-        if not shutil.which('xvfb-run'):
-            raise RuntimeError('xvfb-run is required for windowless system WebKit rendering')
-        if args.output:
-            width, strip_height = args.width, args.strip_height
+        if args.file:
+            if args.output:
+                width, page_height, row_height = args.width, args.strip_height, 1
+            else:
+                if not shutil.which('kitten'):
+                    raise RuntimeError("Kitty's kitten executable is required")
+                rows, cols, width, screen_height = terminal_size()
+                row_height = max(1, screen_height // rows)
+                page_height = max(row_height, (screen_height // 2 // row_height) * row_height)
         else:
             if not shutil.which('kitten'):
-                raise RuntimeError('Kitty\'s kitten executable is required')
+                raise RuntimeError("Kitty's kitten executable is required")
             rows, cols, width, screen_height = terminal_size()
-            # Whole terminal rows prevent rounding gaps between image placements.
-            row_quantum = screen_height // math.gcd(screen_height, rows)
-            strip_height = max(row_quantum, (screen_height // 2 // row_quantum) * row_quantum)
-        with tempfile.TemporaryDirectory(prefix='mdview-') as temporary:
-            root = Path(temporary)
-            document = root / 'document.html'
-            document.write_text(render_html(source, args.file.resolve().parent), encoding='utf-8')
-            page = root / 'page.png'
-            boundaries = root / 'boundaries.json'
-            subprocess.run(['xvfb-run', '-a', sys.executable, str(Path(__file__).resolve()),
-                            '--snapshot-worker', str(document), str(page), str(width), str(boundaries)],
-                           check=True, timeout=40)
-            block_boundaries = json.loads(boundaries.read_text(encoding='utf-8'))
-            strips = split_image(page, root, strip_height, 1, block_boundaries)
-            if args.output:
-                args.output.mkdir(parents=True, exist_ok=True)
-                for path in strips:
-                    shutil.copyfile(path, args.output / path.name)
-                print(f'Exported {len(strips)} strip(s) to {args.output}')
+            row_height = max(1, screen_height // rows)
+            page_height = row_height * max(1, rows - 1)
+
+        worker = start_renderer_worker()
+        try:
+            if args.file:
+                response = request_render(worker, {
+                    'path': str(args.file.resolve()), 'width': width,
+                    'page_height': page_height, 'row_height': row_height,
+                })
+                if not response.get('ok'):
+                    raise RuntimeError(response.get('error', 'Rendering failed'))
+                strips = [Path(path) for path in response['strips']]
+                if args.output:
+                    args.output.mkdir(parents=True, exist_ok=True)
+                    for index, path in enumerate(strips):
+                        shutil.copyfile(path, args.output / f'strip-{index:05d}.png')
+                    print(f'Exported {len(strips)} strip(s) to {args.output}')
+                else:
+                    subprocess.run([
+                        'kitten', 'icat', '--align=left', '--background=none',
+                        '--fit=none', '--transfer-mode=stream', '--stdin=no',
+                        '--use-window-size', f'{cols},{rows},{width},{screen_height}',
+                        *map(str, strips),
+                    ], check=True)
             else:
-                # Stream transfer lets the temporary files be removed immediately.
-                subprocess.run(['kitten', 'icat', '--align=left', '--background=none',
-                                '--fit=none', '--transfer-mode=stream', '--stdin=no',
-                                '--use-window-size', f'{cols},{rows},{width},{screen_height}',
-                                *map(str, strips)], check=True)
+                curses.wrapper(lambda screen: picker(screen, worker, rows, cols, width, screen_height))
+        finally:
+            close_renderer_worker(worker)
         return 0
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(f'mdview: {error}', file=sys.stderr)
@@ -372,7 +427,5 @@ def main() -> int:
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--renderer-worker':
         renderer_worker()
-    elif len(sys.argv) > 1 and sys.argv[1] == '--snapshot-worker':
-        snapshot(Path(sys.argv[2]), Path(sys.argv[3]), int(sys.argv[4]), Path(sys.argv[5]))
     else:
         sys.exit(main())

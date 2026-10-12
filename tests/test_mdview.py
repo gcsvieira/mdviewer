@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from PIL import Image
 import mdview
@@ -134,6 +135,48 @@ class RendererWorkerTests(unittest.TestCase):
                 worker.wait(timeout=5)
                 worker.stdout.close()
 
+
+class TerminalNavigationTests(unittest.TestCase):
+    def test_vim_keys_map_to_picker_and_preview_actions(self):
+        action = getattr(mdview, 'navigation_action', lambda *_: None)
+        self.assertEqual(action('picker', 'j'), 'down')
+        self.assertEqual(action('picker', 'k'), 'up')
+        self.assertEqual(action('picker', '\n'), 'open')
+        self.assertEqual(action('picker', 'ENTER'), 'open')
+        self.assertEqual(action('picker', 'q'), 'quit')
+        self.assertEqual(action('preview', 'j'), 'next')
+        self.assertEqual(action('preview', 'k'), 'previous')
+        self.assertEqual(action('preview', 'q'), 'back')
+
+    def test_picker_selection_stays_within_file_list(self):
+        move = getattr(mdview, 'move_selection', lambda index, action, count: index)
+        self.assertEqual(move(0, 'up', 3), 0)
+        self.assertEqual(move(0, 'down', 3), 1)
+        self.assertEqual(move(2, 'down', 3), 2)
+
+    def test_picker_files_are_sorted_markdown_in_current_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'z.MD').touch()
+            (root / 'a.markdown').touch()
+            (root / 'b.txt').touch()
+            (root / 'sub').mkdir()
+            self.assertEqual([p.name for p in mdview.markdown_files(root)], ['a.markdown', 'z.MD'])
+
+    def test_returning_from_preview_clears_image_before_picker_redraw(self):
+        events = []
+
+        class Screen:
+            def clear(self):
+                events.append('screen-clear')
+
+            def refresh(self):
+                events.append('screen-refresh')
+
+        restore = getattr(mdview, 'restore_picker', lambda _screen: None)
+        with patch('mdview.clear_kitty_images', side_effect=lambda: events.append('kitty-clear'), create=True):
+            restore(Screen())
+        self.assertEqual(events, ['kitty-clear', 'screen-clear', 'screen-refresh'])
 
 if __name__ == '__main__':
     unittest.main()

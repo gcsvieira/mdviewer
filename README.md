@@ -13,13 +13,21 @@ sudo dnf install kitty gtk3 webkit2gtk4.1 xorg-x11-server-Xvfb python3-gobject
 python3 -m pip install -r requirements.txt
 ```
 
-Then run:
+Open the current directory's Markdown picker:
+
+```sh
+./mdview
+```
+
+Use `j` and `k` to choose a file, Enter to preview it, and `q` to return to the list. Press `q` in the list to return to the shell. The WebKit renderer stays alive while you browse and runs on a private Xvfb display, so no window appears on your desktop.
+
+For one quick inline view that returns to the prompt:
 
 ```sh
 ./mdview path/to/file.md
 ```
 
-The image uses the terminal's current pixel width and keeps its left edge aligned. Long documents are split into transparent PNG strips whose heights align to terminal rows. The terminal returns to the shell when rendering finishes.
+In the picker, use `j`/`k` to move between image pages and `q` to return to the file list. Images use the terminal's current pixel width and stay left-aligned. Long documents break before headings or paragraphs when possible, then split into row-aligned strips.
 
 Export image strips without Kitty:
 
