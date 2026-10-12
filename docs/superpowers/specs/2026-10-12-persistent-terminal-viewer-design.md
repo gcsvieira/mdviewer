@@ -22,6 +22,7 @@ The interactive UI runs in the original terminal. A small line-based request/res
 
 - Use terminal pixel width captured when the session starts; do not resize the render after terminal resizing.
 - Keep each image strip at a consistent width and align strip heights to terminal cell rows, avoiding horizontal drift or seams.
+- Prefer strip boundaries immediately before headings or paragraphs so a strip does not cut through text. If a single block exceeds the available page height, split that block at a row-aligned position as a fallback.
 - Preserve the existing transparent dark-terminal styling, relative images, tables, strikethrough, and expanded Obsidian-style callouts.
 - Keep raw HTML disabled and wikilinks unsupported.
 - Treat image transfer and cleanup as part of each view transition so old images do not remain over the picker or next document.
@@ -36,7 +37,7 @@ The interactive UI runs in the original terminal. A small line-based request/res
 
 - Exercise picker movement, opening a document, returning to the picker, and quitting in a Kitty terminal.
 - Confirm the renderer process is reused across at least two documents and no window appears on the desktop.
-- Confirm long-document strips retain equal width and cell-row alignment across a page transition.
+- Confirm long-document strips retain equal width and cell-row alignment, and break before headings or paragraphs when a suitable boundary is available.
 - Keep the existing Markdown rendering checks passing and add focused checks for picker navigation and renderer reuse.
 
 ## Decisions
