@@ -13,6 +13,9 @@
 # Python artifacts
 __pycache__/
 *.py[cod]
+dist/
+build/
+.venv/
 
 # OS metadata
 .DS_Store

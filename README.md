@@ -1,74 +1,147 @@
 # mdviewer
 
-Render Markdown as a styled, transparent image in a Kitty terminal. The renderer uses system WebKitGTK rather than bundling a browser.
+A lightweight Markdown browser for Kitty. Markdown becomes HTML/CSS, then transparent images rendered by the system WebKitGTK engine. No Electron or visible renderer windows.
 
-## Try it
+## Install
 
-Requirements: Kitty, Python 3, GTK 3, WebKitGTK 4.1, Xvfb, `markdown-it-py`, and Pillow.
+The release installer supports **Linux x86_64 with glibc 2.34 or newer**. It installs a small compiled native launcher at `~/.local/bin/mdview`, the Python application and its virtual environment under `~/.local/share/mdviewer`, and adds the executable directory to your shell's PATH. Python and WebKit remain runtime dependencies; this is not a standalone bundled browser.
 
-On Fedora, install the system packages and Python libraries:
+Install the system dependencies first.
 
-```sh
-sudo dnf install kitty gtk3 webkit2gtk4.1 xorg-x11-server-Xvfb python3-gobject
-python3 -m pip install -r requirements.txt
-```
-
-Open the folder and Markdown picker in the current directory:
+**Fedora:**
 
 ```sh
-./mdview
+sudo dnf install kitty python3 python3-pip python3-gobject python3-cairo \
+  gtk3 webkit2gtk4.1 xorg-x11-server-Xvfb xorg-x11-xauth curl
 ```
 
-The default controls are Up/Down to select, Right to open a file or folder, Left to return to the containing list or parent folder, and Home/End to jump to the edges. Enter does not open files. `q` exits from every screen, including while a file is loading.
+**Ubuntu 22.04+ / Debian 12+:**
 
-Folders are shown one level at a time. The current folder refreshes automatically while idle, preserving the selected item when files appear or disappear. Parent navigation stops at the directory where the session started; explicit symlinks are followed normally.
+```sh
+sudo apt update
+sudo apt install kitty python3 python3-venv python3-pip python3-gi \
+  python3-gi-cairo gir1.2-gtk-3.0 gir1.2-webkit2-4.1 xvfb xauth curl
+```
 
-Press `s` in the picker to open settings. Use Right or Space to change the selected value; Left, Escape, or `s` returns to the picker. Preferences are saved immediately in `~/.config/mdviewer/settings.json`:
+These use the distributions' [WebKitGTK packages](https://packages.fedoraproject.org/pkgs/webkitgtk/webkit2gtk4.1/) and [WebKit 4.1 introspection bindings](https://packages.ubuntu.com/jammy/gir1.2-webkit2-4.1).
 
-| Setting | Default | Options |
+Check that `kitten --version` works. Older distribution versions of Kitty may not provide the standalone `kitten` executable; use a current [Kitty release](https://sw.kovidgoyal.net/kitty/binary/) in that case. This release was tested with Kitty 0.47.1.
+
+Then install mdviewer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gcsvieira/mdviewer/main/install.sh | sh
+```
+
+The installer downloads the latest release, verifies its SHA-256 checksum, and installs `markdown-it-py` and Pillow in a virtual environment that can use the system GTK bindings. Run the same command to update. Existing `~/.config/mdviewer/settings.json` is preserved.
+
+PATH setup supports bash, zsh, and fish. Open a new terminal if the command is not immediately available. You can also invoke `~/.local/bin/mdview` directly.
+
+To inspect the installer before running it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/gcsvieira/mdviewer/main/install.sh -o install.sh
+sh install.sh
+```
+
+### Dependencies
+
+- Kitty, including its `kitten` executable, for terminal graphics.
+- Python **3.10+**, with `venv` and pip.
+- GTK **3**, WebKitGTK **4.1**, PyGObject, and its Cairo bridge.
+- Xvfb, `xvfb-run`, and `xauth` for rendering offscreen, including in Wayland sessions.
+- curl, tar, and GNU coreutils (`install`, `sha256sum`, `mktemp`, etc.) for the installer.
+- `markdown-it-py >=3,<4` and `Pillow >=10,<13`, installed automatically in the application's virtual environment.
+- An editor for `e`: `$EDITOR`, then `$VISUAL`, then `vi`.
+
+System packages are installed through your package manager, not automatically by the curl script. A C compiler is needed only when building the launcher from source.
+
+## Quick guide
+
+```sh
+mdview                         # Browse the current folder
+mdview path/to/note.md          # Quick inline print, then return to the prompt
+mdview note.md --output /tmp/mdview-images --width 1200 --strip-height 800
+```
+
+Folders appear one level at a time. The picker refreshes automatically when files appear or disappear and preserves selection where possible. Parent navigation stops at the launch folder; explicitly opened symlinks are followed normally.
+
+| Action | Default controls | Vim mode |
 | --- | --- | --- |
-| `vim-mode` | off | Arrow/Home/End controls, or exclusively `hjkl` and `gg`/`G` |
-| `file-navigation-style` | scroll | Scroll one terminal row, or move between paragraph-aware pages |
-| `element-color` | white | White or black foreground for the UI and rendered Markdown |
+| Select / scroll or page | Up / Down | `k` / `j` |
+| Open file or folder | Right | `l` |
+| Return to list / parent | Left | `h` |
+| First / last, top / bottom | Home / End | `gg` / `G` |
+| Jump to a percentage | `22` + Enter | `22G` |
+| Edit selected file | `e` | `e` |
+| Settings from the picker | `s` | `s` |
+| Exit to your terminal | `q` | `q` |
 
-When Vim mode is on, `j`/`k` selects or scrolls, `l` opens/changes a setting, `h` returns, and `gg`/`G` jumps to the edges. Arrow keys and Home/End are disabled in this mode. Footer hints show only the active scheme. Escape and `s` still leave settings.
+Enter does not open files. Keyboard modes are exclusive: Vim mode disables arrows and Home/End. Percentage input accepts integers from 0–100; Backspace edits the number, and Escape cancels it. Page jumps snap to the nearest page.
 
-In a preview, type a percentage from 0 to 100 followed by Enter in arrow mode, or `G` in Vim mode. Backspace edits the number and Escape cancels it. Other navigation keys cancel the pending number and perform their usual action. Paginated jumps snap to the nearest page; the last page is 100%.
+Opening a file displays an animated indeterminate bar. `q` also quits during loading. The background renderer is reused while browsing.
 
-Opening a file shows an animated indeterminate bar while the background renderer works. The renderer stays alive between documents and runs on a private Xvfb display, so no rendering window appears on the desktop.
+## Settings
 
-Press `e` in the list or preview to edit the file in the same terminal. The viewer uses a nonempty `$EDITOR`, then `$VISUAL`, then `vi`. Commands can include arguments and quoted executable paths; for example:
+Press `s` in the picker. Right or `l` changes the selected option; Space also works. Left or `h`, Escape, or `s` returns to the picker. Changing Vim mode switches the active navigation keys immediately.
 
-```sh
-EDITOR='nvim -f' ./mdview
+Preferences save automatically at **`~/.config/mdviewer/settings.json`**:
+
+```json
+{
+  "vim-mode": false,
+  "file-navigation-style": "scroll",
+  "element-color": "white"
+}
 ```
 
-When the editor exits, the viewer restores the list selection or refreshes the preview at the previous scroll position. Editor errors appear in the footer. If you use a GUI editor, include its wait flag (such as `code --wait`) so the viewer resumes after editing finishes.
+| Setting | Values | Default |
+| --- | --- | --- |
+| `vim-mode` | `false` / `true` | `false` |
+| `file-navigation-style` | `scroll` / `paginated` | `scroll` |
+| `element-color` | `white` / `black` | `white` |
 
-For one quick inline view that returns to the prompt:
+White foreground suits dark terminals; black suits light terminals. The terminal background remains transparent. The palette also applies to quick printing and exports. Invalid preferences fall back to defaults.
 
-```sh
-./mdview path/to/file.md
-```
+Scroll mode moves one terminal row at a time. Paginated mode prefers breaks before headings or paragraphs and splits oversized blocks at row boundaries. Resizing adjusts the UI and preview height; the document retains its original rendered width.
 
-The full document is rendered once. Scroll mode moves a viewport over the image; paginated mode prefers breaks before headings or paragraphs and splits oversized blocks at row boundaries. Images use the terminal's initial pixel width and stay left-aligned.
+## Editing
 
-Resizing adjusts the menu and preview height without rerendering the document. Its original layout width is retained.
-
-The file list uses a magenta selection marker, folder names, and modification times. Hidden directories and `node_modules` are excluded. The renderer forces GTK's X11 backend on the private Xvfb display, even in a Wayland session.
-
-Quick inline output and exports still use image strips. Long documents break before headings or paragraphs when possible, then split into row-aligned strips.
-
-Export image strips without Kitty:
+`e` hands the same terminal to your editor. Commands may contain flags and quoted executable paths:
 
 ```sh
-./mdview path/to/file.md --output /tmp/mdview-images --width 1200 --strip-height 800
+EDITOR='nvim -f' mdview
 ```
 
-## Rendering
+On exit, the viewer restores selection or refreshes the preview at the previous scroll position. Editor errors appear in the footer. GUI editors need their wait flag, such as `EDITOR='code --wait'`.
 
-The prototype supports CommonMark, tables, strikethrough, and Obsidian-style callouts such as `> [!NOTE]`. Callouts render expanded. Raw HTML is disabled. Relative images and links use the Markdown file's directory as their base.
+## Build from source
 
-The document background is transparent, with the selected white or black foreground palette and subtle translucent callout and code backgrounds. The image is pixels, so terminal text selection and search do not work on rendered content.
+With the system dependencies above, git, and a C compiler installed:
 
-See the [repository setup plan](docs/superpowers/plans/2026-10-12-repository-setup.md) for the original project scope.
+```sh
+git clone https://github.com/gcsvieira/mdviewer.git
+cd mdviewer
+./scripts/build.sh
+./install.sh --archive "$PWD/dist/mdviewer-linux-$(uname -m).tar.gz"
+```
+
+The build produces a native launcher, a release archive containing the Python sources, and a checksum. It can build for another Linux architecture using that machine's native compiler; published release downloads currently cover x86_64.
+
+For development without installing:
+
+```sh
+python3 -m venv --system-site-packages .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements.txt
+./mdview
+python3 -m unittest discover -s tests
+```
+
+The installer accepts `--prefix DIRECTORY` and `--no-path` for custom installs. Uninstall by removing `~/.local/bin/mdview` and `~/.local/share/mdviewer`; keep `~/.config/mdviewer` to retain preferences.
+
+## Rendering and limits
+
+CommonMark, tables, strikethrough, relative images, and expanded Obsidian-style callouts (`> [!NOTE]`) are supported. Raw HTML and wikilinks are not supported. Images remain left-aligned, with transparent backgrounds and Obsidian-inspired typography.
+
+Rendered content is pixels, so terminal text selection and searching do not work within it. The viewer currently requires Kitty and Linux. It uses system WebKitGTK rather than bundling a browser engine.

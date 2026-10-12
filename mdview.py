@@ -863,7 +863,7 @@ def close_renderer_worker(worker) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog='mdview', description=__doc__)
     parser.add_argument('file', nargs='?', type=Path, help='Markdown file to render; omit for the picker')
     parser.add_argument('--output', type=Path, help='Export numbered PNG strips to a directory instead of displaying')
     parser.add_argument('--width', type=int, default=900, help='Export width in pixels (default: 900)')
