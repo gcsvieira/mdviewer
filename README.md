@@ -1,6 +1,14 @@
 # mdviewer
 
-A lightweight Markdown browser for Kitty. Markdown becomes HTML/CSS, then transparent images rendered by the system WebKitGTK engine. No Electron or visible renderer windows.
+A lightweight Markdown viewer and prettifier for Kitty. It turns Markdown into styled HTML/CSS, then displays it as transparent images rendered by the system WebKitGTK engine. No Electron or visible renderer windows.
+
+![mdviewer demo](assets/mdview-demo.gif)
+
+## What mdviewer does (and doesn't do)
+
+mdviewer makes Markdown comfortable to read in a terminal, with Obsidian-inspired typography, callouts, and a transparent background. Browse folders in the interactive picker, or quickly print a single file. Use `e` to open the source in your configured editor.
+
+The reading view is an image, so its document content is not interactive: links and wikilinks cannot be followed, text cannot be selected or copied, and browser-style search does not work. Wikilinks are not interpreted. Use your editor when you need to copy or change the Markdown source.
 
 ## Install
 
@@ -142,6 +150,4 @@ The installer accepts `--prefix DIRECTORY` and `--no-path` for custom installs. 
 
 ## Rendering and limits
 
-CommonMark, tables, strikethrough, relative images, and expanded Obsidian-style callouts (`> [!NOTE]`) are supported. Raw HTML and wikilinks are not supported. Images remain left-aligned, with transparent backgrounds and Obsidian-inspired typography.
-
-Rendered content is pixels, so terminal text selection and searching do not work within it. The viewer currently requires Kitty and Linux. It uses system WebKitGTK rather than bundling a browser engine.
+The renderer supports CommonMark, tables, strikethrough, relative images, and expanded Obsidian-style callouts (`> [!NOTE]`). Raw HTML is disabled. Images remain left-aligned, with transparent backgrounds and Obsidian-inspired typography. The viewer requires Kitty and Linux, and uses system WebKitGTK rather than bundling a browser engine.
