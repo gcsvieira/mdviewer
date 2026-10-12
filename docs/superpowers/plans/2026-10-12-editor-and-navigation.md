@@ -48,7 +48,7 @@
 
 ## Task 2: Hand off to the editor and refresh on return
 
-**Files:** Modify `mdview.py`, `tests/test_mdview.py`, `README.md`.
+**Files:** Modify `mdview.py`, `README.md`; create `tests/test_editor.py`.
 
 **Interfaces:**
 - Consumes Task 1's `edit` action, `request_render(worker, request)`, and existing image cleanup/drawing helpers.
@@ -56,17 +56,17 @@
 - Produces `edit_file(screen, path: Path) -> str | None`, which manages the terminal handoff, restores it in `finally`, and returns an error message or `None`.
 - `picker` handles `edit` without replacing the worker; it rescans the list or reloads the preview according to the originating mode.
 
-- [ ] Add `EditorTests.test_editor_command_preserves_flags_and_spaced_paths`: with `$EDITOR='nvim -f'`, assert argv is `['nvim', '-f', str(path.resolve())]`. Cover quoted executable paths, literal shell metacharacters in filenames, empty variables, `$VISUAL` fallback, and final `vi` fallback.
-- [ ] Add `test_editor_restores_terminal_after_failure`: record the calls for clearing images, `def_prog_mode`, `endwin`, editor launch, `reset_prog_mode`, restoring keypad/cursor, and screen clearing. Assert the restoration happens after success, nonzero exit, `OSError`, and malformed quoting. Assert `subprocess.run` uses argument-list execution without a shell or redirected terminal streams.
-- [ ] Add `test_resize_during_editor_restores_current_screen_bounds`: simulate changed tty rows/columns; assert curses is resized to those dimensions before drawing resumes. Retain the existing resize regression tests.
-- [ ] Add picker-loop integration tests: editing from the list preserves the selected path and refreshes modification times; editing from preview rereads the file with the same worker and clamps its old offset after shortening. Deleting the file or failing to rerender returns to the list with an error. Editing an empty list launches nothing.
-- [ ] Run the focused tests; confirm the new assertions fail.
-- [ ] Implement `editor_command` and `edit_file`. After the editor exits, restore curses, obtain the current terminal dimensions, and call `curses.resizeterm` when needed. Return concise UI errors for launch/configuration failures and nonzero exit status.
-- [ ] Handle `edit` in `picker`. Reset the pending `g`, refresh the file list, and preserve selection by path where possible. Reload a preview even when the editor reports a nonzero status, because edits may have been saved. Reuse the existing render/load logic through one small helper if needed; keep its dimensions and error handling consistent with normal opening.
-- [ ] Update both footers and README to document `e`, editor precedence, command arguments, and return behavior. Document the wait-flag requirement for GUI editors briefly.
-- [ ] Run `python3 -m unittest discover -s tests`, `python3 -m py_compile mdview.py`, and `git diff --check`.
-- [ ] Run a Kitty smoke check with `$EDITOR` pointing to a small terminal-attached test editor: assert stdin/stdout are TTYs, rewrite a fixture, resize the window, exit, verify the refreshed preview and the original worker process, then return to the list and quit. Manually exercise the same handoff with a real terminal editor.
-- [ ] Commit: `feat: edit markdown in the configured editor`.
+- [x] Add `EditorTests.test_editor_command_preserves_flags_and_spaced_paths`: with `$EDITOR='nvim -f'`, assert argv is `['nvim', '-f', str(path.resolve())]`. Cover quoted executable paths, literal shell metacharacters in filenames, empty variables, `$VISUAL` fallback, and final `vi` fallback.
+- [x] Add `test_editor_restores_terminal_after_failure`: record the calls for clearing images, `def_prog_mode`, `endwin`, editor launch, `reset_prog_mode`, restoring keypad/cursor, and screen clearing. Assert the restoration happens after success, nonzero exit, `OSError`, and malformed quoting. Assert `subprocess.run` uses argument-list execution without a shell or redirected terminal streams.
+- [x] Add `test_resize_during_editor_restores_current_screen_bounds`: simulate changed tty rows/columns; assert curses is resized to those dimensions before drawing resumes. Retain the existing resize regression tests.
+- [x] Add picker-loop integration tests: editing from the list preserves the selected path and refreshes modification times; editing from preview rereads the file with the same worker and clamps its old offset after shortening. Deleting the file or failing to rerender returns to the list with an error. Editing an empty list launches nothing.
+- [x] Run the focused tests; confirm the new assertions fail.
+- [x] Implement `editor_command` and `edit_file`. After the editor exits, restore curses, obtain the current terminal dimensions, and call `curses.resizeterm` when needed. Return concise UI errors for launch/configuration failures and nonzero exit status.
+- [x] Handle `edit` in `picker`. Reset the pending `g`, refresh the file list, and preserve selection by path where possible. Reload a preview even when the editor reports a nonzero status, because edits may have been saved. Reuse the existing render/load logic through one small helper if needed; keep its dimensions and error handling consistent with normal opening.
+- [x] Update both footers and README to document `e`, editor precedence, command arguments, and return behavior. Document the wait-flag requirement for GUI editors briefly.
+- [x] Run `python3 -m unittest discover -s tests`, `python3 -m py_compile mdview.py`, and `git diff --check`.
+- [x] Run a Kitty smoke check with `$EDITOR` pointing to a small terminal-attached test editor: assert stdin/stdout are TTYs, rewrite a fixture, resize the window, exit, verify the refreshed preview and the original worker process, then return to the list and quit. Manually exercise the same handoff with a real terminal editor.
+- [x] Commit: `feat: edit markdown in the configured editor`.
 
 ## Completion
 

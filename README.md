@@ -23,6 +23,14 @@ Use Up/Down or `j`/`k` to choose a file. Enter, Right, or `l` opens it; Left, `h
 
 Home or `gg` jumps to the first file or the top of the preview; End or `G` jumps to the last file or the bottom of the preview.
 
+Press `e` in the list or preview to edit the file in the same terminal. The viewer uses a nonempty `$EDITOR`, then `$VISUAL`, then `vi`. Commands can include arguments and quoted executable paths; for example:
+
+```sh
+EDITOR='nvim -f' ./mdview
+```
+
+When the editor exits, the viewer restores the list selection or refreshes the preview at the previous scroll position. Editor errors appear in the footer. If you use a GUI editor, include its wait flag (such as `code --wait`) so the viewer resumes after editing finishes.
+
 For one quick inline view that returns to the prompt:
 
 ```sh

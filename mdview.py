@@ -9,7 +9,9 @@ import math
 import os
 import re
 import queue
+import shlex
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -320,6 +322,59 @@ def navigation_input(mode: str, key: str, pending_g: bool) -> tuple[str | None, 
     return navigation_action(mode, key), False
 
 
+def editor_command(path: Path) -> list[str]:
+    command = next((os.environ[name].strip() for name in ('EDITOR', 'VISUAL')
+                    if os.environ.get(name, '').strip()), 'vi')
+    arguments = shlex.split(command)
+    if not arguments or not arguments[0]:
+        raise ValueError('Editor command is empty')
+    return [*arguments, str(path.resolve())]
+
+
+def edit_file(screen, path: Path) -> str | None:
+    try:
+        command = editor_command(path)
+    except ValueError as exception:
+        return f'Invalid editor command: {exception}'
+    clear_kitty_images()
+    curses.def_prog_mode()
+    curses.endwin()
+    # Let the editor handle Ctrl+C while the viewer waits. Caught signal
+    # handlers revert to defaults when the editor executable starts.
+    previous_interrupt = signal.signal(signal.SIGINT, lambda _signal, _frame: None)
+    error = None
+    try:
+        result = subprocess.run(command)
+        if result.returncode:
+            error = f'Editor exited with status {result.returncode}'
+    except OSError as exception:
+        error = f'Could not open editor: {exception}'
+    finally:
+        signal.signal(signal.SIGINT, previous_interrupt)
+        curses.reset_prog_mode()
+        rows, cols, _, _ = terminal_size()
+        if (rows, cols) != screen.getmaxyx():
+            curses.resizeterm(rows, cols)
+        screen.keypad(True)
+        curses.curs_set(0)
+        screen.clear()
+        screen.refresh()
+    return error
+
+
+def load_document(worker, path: Path, width: int, page_height: int, row_height: int) -> tuple[Image.Image, Path]:
+    response = request_render(worker, {
+        'path': str(path.resolve()), 'width': width,
+        'page_height': page_height, 'row_height': row_height,
+    })
+    if not response.get('ok'):
+        raise RuntimeError(response.get('error', 'Rendering failed'))
+    image_path = Path(response['image'])
+    with Image.open(image_path) as source:
+        image = source.convert('RGBA')
+    return image, image_path.parent / 'viewport.png'
+
+
 def move_selection(index: int, action: str, count: int) -> int:
     if count < 1:
         return 0
@@ -406,15 +461,17 @@ def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
         put(row + 1, left, modified_ago(files[index]), accent if active else curses.A_DIM)
     if not files:
         put(start, left, 'No Markdown files found.', curses.A_DIM)
-    put(rows - 2, left, error or '↑/↓ j/k move · Home/End gg/G · Enter/→/l open · q quit', curses.A_DIM)
+    put(rows - 2, left, error or '↑/↓ j/k move · Home/End gg/G · Enter/→/l open · e edit · q quit', curses.A_DIM)
     screen.refresh()
 
 
-def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, cols: int, rows: int) -> None:
+def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, cols: int, rows: int,
+                  error: str | None = None) -> None:
     screen.erase()
     put_text(screen, 0, 0, f' {title} ', curses.A_DIM)
     percent = round(offset / maximum * 100) if maximum else 100
-    put_text(screen, rows - 1, 0, f' ↑/↓ j/k scroll · Home/End gg/G · ←/h/q files   {percent}% ', curses.A_DIM)
+    put_text(screen, rows - 1, 0,
+             error or f' ↑/↓ j/k scroll · Home/End gg/G · e edit · ←/h/q files   {percent}% ', curses.A_DIM)
     if rows < 3:
         screen.refresh()
         return
@@ -455,16 +512,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 selected = move_selection(selected, action, len(files))
             elif action == 'open' and files:
                 try:
-                    response = request_render(worker, {
-                        'path': str(files[selected].resolve()), 'width': width,
-                        'page_height': page_height, 'row_height': row_height,
-                    })
-                    if not response.get('ok'):
-                        raise RuntimeError(response.get('error', 'Rendering failed'))
-                    image_path = Path(response['image'])
-                    with Image.open(image_path) as source:
-                        image = source.convert('RGBA')
-                    viewport = image_path.parent / 'viewport.png'
+                    image, viewport = load_document(worker, files[selected], width, page_height, row_height)
                     offset, redraw = 0, True
                     mode, error = 'preview', None
                 except (OSError, RuntimeError, ValueError, KeyError) as exception:
@@ -474,7 +522,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 crop_viewport(image, offset, page_height).save(viewport)
                 clear_kitty_images()
                 show_viewport(screen, viewport, str(files[selected].relative_to(root)), offset,
-                              max(0, image.height - page_height), cols, rows)
+                              max(0, image.height - page_height), cols, rows, error)
                 redraw = False
             key = screen.getch()
             action, pending_g = navigation_input('preview', key_text(key), pending_g)
@@ -485,6 +533,25 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 new_offset = scroll_offset(offset, action, image.height, page_height, row_height)
                 redraw = new_offset != offset
                 offset = new_offset
+        if action == 'edit' and files:
+            path = files[selected]
+            error = edit_file(screen, path)
+            pending_g = False
+            files = markdown_files(root)
+            selected = files.index(path) if path in files else min(selected, max(0, len(files) - 1))
+            rows, cols = screen.getmaxyx()
+            page_height = row_height * max(1, rows - 2)
+            if mode == 'preview':
+                try:
+                    if not path.is_file():
+                        raise RuntimeError(f'File no longer exists: {path.name}')
+                    image, viewport = load_document(worker, path, width, page_height, row_height)
+                    offset = min(offset, max(0, image.height - page_height))
+                    redraw = True
+                except (OSError, RuntimeError, ValueError, KeyError) as exception:
+                    error = f'{error}; {exception}' if error else str(exception)
+                    restore_picker(screen)
+                    mode = 'picker'
 
 
 def run_picker(screen, worker, rows, cols, width, screen_height):
