@@ -1,0 +1,15 @@
+# Local agent configuration and credentials
+.agents/
+.aws/
+.codex/
+.env
+.env.*
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
