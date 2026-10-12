@@ -111,6 +111,13 @@ class EditorPickerTests(unittest.TestCase):
     def run_picker(self, screen):
         mdview.picker(screen, self.worker, 8, 80, 640, 160)
 
+    def test_q_exits_directly_from_preview_and_clears_image(self):
+        with patch('mdview.request_render', return_value={'ok': True, 'image': str(self.page)}), \
+             patch('mdview.restore_picker') as restore, patch('mdview.clear_kitty_images') as clear:
+            self.run_picker(Screen((ord('l'), ord('q'))))
+        restore.assert_not_called()
+        self.assertEqual(clear.call_count, 2, 'clear before displaying and when quitting')
+
     def test_edit_from_list_preserves_selected_path_after_rescan(self):
         self.note.rename(self.root / 'b.md')
         selected = self.root / 'c.md'

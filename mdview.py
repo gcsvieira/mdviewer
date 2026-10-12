@@ -313,7 +313,7 @@ def navigation_action(mode: str, key: str) -> str | None:
         return 'top' if key == 'gg' else 'bottom'
     if mode == 'picker':
         return {'j': 'down', 'k': 'up', 'l': 'open', '\n': 'open', '\r': 'open', 'ENTER': 'open', 'q': 'quit'}.get(key)
-    return {'j': 'next', 'k': 'previous', 'h': 'back', 'q': 'back'}.get(key)
+    return {'j': 'next', 'k': 'previous', 'h': 'back', 'q': 'quit'}.get(key)
 
 
 def navigation_input(mode: str, key: str, pending_g: bool) -> tuple[str | None, bool]:
@@ -471,7 +471,7 @@ def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, co
     put_text(screen, 0, 0, f' {title} ', curses.A_DIM)
     percent = round(offset / maximum * 100) if maximum else 100
     put_text(screen, rows - 1, 0,
-             error or f' ↑/↓ j/k scroll · Home/End gg/G · e edit · ←/h/q files   {percent}% ', curses.A_DIM)
+             error or f' ↑/↓ j/k scroll · Home/End gg/G · e edit · ←/h files · q quit   {percent}% ', curses.A_DIM)
     if rows < 3:
         screen.refresh()
         return
@@ -526,6 +526,9 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 redraw = False
             key = screen.getch()
             action, pending_g = navigation_input('preview', key_text(key), pending_g)
+            if action == 'quit':
+                clear_kitty_images()
+                return
             if action == 'back':
                 restore_picker(screen)
                 mode = 'picker'

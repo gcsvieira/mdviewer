@@ -216,7 +216,7 @@ class TerminalNavigationTests(unittest.TestCase):
                 self.size = (24, 100)
                 self.events = iter(((mdview.curses.KEY_RESIZE, (6, 20)),
                                     (13, None), (mdview.curses.KEY_RESIZE, (2, 8)),
-                                    (ord('q'), None), (mdview.curses.KEY_RESIZE, (24, 100)),
+                                    (ord('h'), None), (mdview.curses.KEY_RESIZE, (24, 100)),
                                     (ord('q'), None)))
 
             def erase(self): pass
@@ -260,7 +260,7 @@ class TerminalNavigationTests(unittest.TestCase):
         self.assertEqual(mdview.navigation_input('picker', 'g', False), (None, True))
         self.assertEqual(mdview.navigation_input('picker', 'g', True), ('top', False))
         self.assertEqual(mdview.navigation_input('picker', 'j', True), ('down', False))
-        self.assertEqual(mdview.navigation_input('preview', 'q', True), ('back', False))
+        self.assertEqual(mdview.navigation_input('preview', 'q', True), ('quit', False))
         self.assertEqual(mdview.navigation_input('preview', 'G', True), ('bottom', False))
         self.assertEqual(mdview.navigation_input('picker', 'DOWN', True), ('down', False))
         for mode in ('picker', 'preview'):
@@ -305,7 +305,7 @@ class TerminalNavigationTests(unittest.TestCase):
         self.assertEqual(action('picker', 'q'), 'quit')
         self.assertEqual(action('preview', 'j'), 'next')
         self.assertEqual(action('preview', 'k'), 'previous')
-        self.assertEqual(action('preview', 'q'), 'back')
+        self.assertEqual(action('preview', 'q'), 'quit')
         for mode in ('picker', 'preview'):
             self.assertEqual(action(mode, 'gg'), 'top')
             self.assertEqual(action(mode, 'G'), 'bottom')
