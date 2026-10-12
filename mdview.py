@@ -415,6 +415,12 @@ def scroll_offset(offset: int, action: str, height: int, viewport_height: int, r
     return max(0, min(offset + delta, max(0, height - viewport_height)))
 
 
+def percentage_offset(percent: int, height: int, viewport_height: int) -> int:
+    if not 0 <= percent <= 100:
+        raise ValueError('Percentage must be between 0 and 100')
+    return round(max(0, height - viewport_height) * percent / 100)
+
+
 def crop_viewport(image: Image.Image, offset: int, height: int) -> Image.Image:
     return image.crop((0, offset, image.width, min(image.height, offset + height)))
 
@@ -493,6 +499,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
     page_height = row_height * max(1, rows - 2)
     mode, image, offset, redraw = 'picker', None, 0, True
     pending_g = False
+    pending_percentage = ''
 
     while True:
         current_rows, current_cols = screen.getmaxyx()
@@ -525,7 +532,32 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                               max(0, image.height - page_height), cols, rows, error)
                 redraw = False
             key = screen.getch()
-            action, pending_g = navigation_input('preview', key_text(key), pending_g)
+            text = key_text(key)
+            digit = bool(text) and text in '0123456789'
+            if digit or (pending_percentage and key in (curses.KEY_BACKSPACE, 8, 127)):
+                pending_percentage = pending_percentage + text if digit else pending_percentage[:-1]
+                pending_g, error = False, None
+                if pending_percentage:
+                    hint = f' Jump to: {pending_percentage}% · G/Enter confirm · Esc cancel '
+                    put_text(screen, rows - 1, 0, hint.ljust(max(1, cols - 1)), curses.A_DIM)
+                    screen.refresh()
+                else:
+                    redraw = True
+                continue
+            if pending_percentage and text in ('G', '\n', '\r', 'ENTER'):
+                try:
+                    offset = percentage_offset(int(pending_percentage), image.height, page_height)
+                    error = None
+                except ValueError:
+                    error = 'Percentage must be between 0 and 100'
+                pending_percentage, pending_g, redraw = '', False, True
+                continue
+            if pending_percentage:
+                pending_percentage, error, redraw = '', None, True
+            if key == 27:
+                pending_g, error, redraw = False, None, True
+                continue
+            action, pending_g = navigation_input('preview', text, pending_g)
             if action == 'quit':
                 clear_kitty_images()
                 return
@@ -534,7 +566,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 mode = 'picker'
             elif action in ('next', 'previous', 'top', 'bottom'):
                 new_offset = scroll_offset(offset, action, image.height, page_height, row_height)
-                redraw = new_offset != offset
+                redraw = redraw or new_offset != offset
                 offset = new_offset
         if action == 'edit' and files:
             path = files[selected]

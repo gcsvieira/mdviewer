@@ -1,8 +1,10 @@
 # Next steps: navigation, folders, and settings
 
-Status: requirements recorded. Implemented so far: global `q` exits, and Enter no longer opens files. Other features remain deferred.
+Status: requirements recorded. Implemented so far: global `q` exits, Enter no longer opens files, and document percentage jumps. Other features remain deferred.
 
 Implemented: `q` exits from the picker or preview; Left/`h` returns from a preview to the list. Right/`l` opens files; Enter does not.
+
+Percentage jumps are implemented with both number + `G` and number + Enter available until exclusive keyboard modes are introduced.
 
 ## Separate keyboard modes
 
@@ -32,7 +34,7 @@ Show and enable one navigation scheme at a time. Remove the combined arrow/Vim s
 - `0G` is equivalent to `gg`; `0` + Enter is equivalent to Home. `100G` or `100` + Enter jumps to the document bottom.
 - Use the same scale as the preview's displayed percentage: `0%` is the top and `100%` is the furthest bottom position. Keep the jump location and percentage indicator consistent.
 - Keep unprefixed `G` as the bottom shortcut in Vim mode. Percentage jumps apply to document previews, not file-list selection.
-- Decide cancellation, invalid-number feedback, and rounding to a scroll or page position when implementing this behavior.
+- Scroll jumps round to the nearest pixel in the existing scrollable range. Inputs are integers from 0–100; invalid values show an error without moving the viewport. Backspace edits the number, Escape cancels it, and another navigation key cancels the number while still performing its action. Define page rounding when paginated mode is implemented.
 
 ## Browse folders explicitly
 
@@ -74,4 +76,4 @@ Do not show a fabricated percentage if the renderer cannot report measurable pro
 
 Retain the background-only persistent renderer, external-editor handoff, resize safety, and quick inline command `mdview file.md`. Implementing these next steps must not introduce renderer windows.
 
-Editing/navigation baseline: `58f129d` on `feat/persistent-terminal-viewer`. With global `q` exit and Enter disabled for opening files, 33 tests pass. This file records new requirements and supersedes conflicting keyboard and recursive-picker decisions in the earlier design documents.
+Editing/navigation baseline: `58f129d` on `feat/persistent-terminal-viewer`. With global `q` exit, Enter disabled for opening files, and percentage jumps implemented, 36 tests pass. This file records new requirements and supersedes conflicting keyboard and recursive-picker decisions in the earlier design documents.

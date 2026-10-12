@@ -124,6 +124,30 @@ class EditorPickerTests(unittest.TestCase):
         restore.assert_not_called()
         self.assertEqual(clear.call_count, 2, 'clear before displaying and when quitting')
 
+    def test_percentage_jumps_with_G_and_enter_match_preview_progress(self):
+        keys = [ord('l'), *map(ord, '22G50\n100G0G50'), mdview.curses.KEY_ENTER,
+                ord('0'), 13, ord('G'), ord('q')]
+        with patch('mdview.request_render', return_value={'ok': True, 'image': str(self.page)}), \
+             patch('mdview.crop_viewport', wraps=mdview.crop_viewport) as crop:
+            self.run_picker(Screen(keys))
+        self.assertEqual([call.args[1] for call in crop.call_args_list], [0, 84, 190, 380, 0, 190, 0, 380])
+
+    def test_percentage_input_rejects_out_of_range_and_can_be_cancelled_or_corrected(self):
+        cases = (([*map(ord, '101G')], 0, 'between 0 and 100'),
+                 ([*map(ord, '50'), mdview.curses.KEY_BACKSPACE, ord('G')], 19, None),
+                 ([*map(ord, '50'), 27, ord('G')], 380, None),
+                 ([*map(ord, '5j4G')], 15, None),
+                 ([*map(ord, '42')], 0, None))
+        for input_keys, expected, error in cases:
+            screen = Screen([ord('l'), *input_keys, ord('q')])
+            with self.subTest(keys=input_keys), \
+                 patch('mdview.request_render', return_value={'ok': True, 'image': str(self.page)}), \
+                 patch('mdview.crop_viewport', wraps=mdview.crop_viewport) as crop:
+                self.run_picker(screen)
+                self.assertEqual(crop.call_args.args[1], expected)
+                if error:
+                    self.assertTrue(any(error in text for text in screen.text))
+
     def test_edit_from_list_preserves_selected_path_after_rescan(self):
         self.note.rename(self.root / 'b.md')
         selected = self.root / 'c.md'

@@ -23,6 +23,8 @@ Use Up/Down or `j`/`k` to choose a file. Right or `l` opens it; Left or `h` retu
 
 Home or `gg` jumps to the first file or the top of the preview; End or `G` jumps to the last file or the bottom of the preview.
 
+In a preview, type a percentage from 0 to 100 followed by `G` or Enter to jump there: `22G`, `50` + Enter, `0G` for the top, or `100G` for the bottom. Both sequences are currently available. Backspace edits the number; Escape cancels it. Other navigation keys cancel the pending number and perform their usual action. Values outside 0–100 are rejected.
+
 Press `e` in the list or preview to edit the file in the same terminal. The viewer uses a nonempty `$EDITOR`, then `$VISUAL`, then `vi`. Commands can include arguments and quoted executable paths; for example:
 
 ```sh

@@ -188,6 +188,15 @@ with tempfile.TemporaryDirectory() as directory:
 
 
 class TerminalNavigationTests(unittest.TestCase):
+    def test_percentage_jump_uses_scrollable_progress_range(self):
+        for percent, expected in ((0, 0), (22, 84), (50, 190), (100, 380)):
+            with self.subTest(percent=percent):
+                self.assertEqual(mdview.percentage_offset(percent, 500, 120), expected)
+        self.assertEqual(mdview.percentage_offset(50, 40, 120), 0)
+        for invalid in (-1, 101):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                mdview.percentage_offset(invalid, 500, 120)
+
     def test_arrow_keys_match_vim_actions(self):
         for mode in ('picker', 'preview'):
             for code, letter in ((mdview.curses.KEY_UP, 'k'), (mdview.curses.KEY_DOWN, 'j')):
