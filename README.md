@@ -1,25 +1,36 @@
 # mdviewer
 
-A lightweight Markdown viewer, launched from the terminal, using a system web engine instead of Electron.
+Render Markdown as a styled, transparent image in a Kitty terminal. The renderer uses system WebKitGTK rather than bundling a browser.
 
-## Status
+## Try it
 
-Initial repository setup. The application is not implemented yet.
+Requirements: Kitty, Python 3, GTK 3, WebKitGTK 4.1, Xvfb, `markdown-it-py`, and Pillow.
 
-## Proposed first version
+On Fedora, install the system packages and Python libraries:
 
-- Open a Markdown file with `mdview file.md` in a native window.
-- Render Markdown as HTML with custom CSS.
-- Reload the preview when the file changes.
-- Edit in an external editor such as Neovim alongside the preview.
+```sh
+sudo dnf install kitty gtk3 webkit2gtk4.1 xorg-x11-server-Xvfb python3-gobject
+python3 -m pip install -r requirements.txt
+```
 
-Wikilinks and vault features are outside the initial scope. A built-in editor may follow later.
+Then run:
 
-## Decisions still open
+```sh
+./mdview path/to/file.md
+```
 
-- Python with GTK/WebKitGTK, or Rust with a system webview.
-- Markdown extensions beyond CommonMark, such as tables and task lists.
-- Whether to include an editor in a later version.
-- Project license.
+The image uses the terminal's current pixel width and keeps its left edge aligned. Long documents are split into transparent PNG strips whose heights align to terminal rows. The terminal returns to the shell when rendering finishes.
 
-See the [repository setup plan](docs/superpowers/plans/2026-10-12-repository-setup.md).
+Export image strips without Kitty:
+
+```sh
+./mdview path/to/file.md --output /tmp/mdview-images --width 1200 --strip-height 800
+```
+
+## Rendering
+
+The prototype supports CommonMark, tables, strikethrough, and Obsidian-style callouts such as `> [!NOTE]`. Callouts render expanded. Raw HTML is disabled. Relative images and links use the Markdown file's directory as their base.
+
+The document background is transparent, with a dark-terminal text palette and subtle translucent callout and code backgrounds. The image is pixels, so terminal text selection and search do not work on rendered content.
+
+See the [repository setup plan](docs/superpowers/plans/2026-10-12-repository-setup.md) for the original project scope.
