@@ -5,6 +5,18 @@ from PIL import Image
 import mdview
 
 
+def start_worker():
+    start = getattr(mdview, 'start_renderer_worker', None)
+    if start is None:
+        raise AssertionError('mdview must provide a persistent WebKit renderer worker')
+    return start()
+
+
+def render_request(worker, path):
+    request = {'path': str(path), 'width': 640, 'page_height': 500, 'row_height': 20}
+    return mdview.request_render(worker, request)
+
+
 class RenderingTests(unittest.TestCase):
     def test_callouts_and_code(self):
         html = mdview.render_html('> [!WARNING]- Custom **title**\n> Body\n\n```\n> [!NOTE] literal\n```\n', Path('/tmp'))
@@ -80,6 +92,47 @@ class RenderingTests(unittest.TestCase):
             visible = [pixel for pixel in rows if pixel[3]]
             expected = [original.getpixel((0, y)) for y in range(original.height)]
             self.assertEqual(visible, expected)
+
+
+class RendererWorkerTests(unittest.TestCase):
+    def test_one_worker_renders_multiple_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / 'first.md'
+            second = root / 'second.md'
+            first.write_text('# First file\n\nFirst body.', encoding='utf-8')
+            second.write_text('# Second file\n\nSecond body.', encoding='utf-8')
+            worker = start_worker()
+            try:
+                self.assertIsNone(worker.poll(), 'renderer worker must remain alive for requests')
+                first_result = render_request(worker, first)
+                self.assertTrue(first_result['ok'], first_result)
+                self.assertTrue(Path(first_result['strips'][0]).is_file())
+                second_result = render_request(worker, second)
+                self.assertTrue(second_result['ok'], second_result)
+                self.assertTrue(Path(second_result['strips'][0]).is_file())
+                self.assertIsNone(worker.poll(), 'the same renderer process must handle both files')
+            finally:
+                worker.stdin.close()
+                worker.wait(timeout=5)
+                worker.stdout.close()
+
+    def test_worker_reports_file_error_and_continues(self):
+        with tempfile.TemporaryDirectory() as directory:
+            valid = Path(directory) / 'valid.md'
+            valid.write_text('A valid document', encoding='utf-8')
+            worker = start_worker()
+            try:
+                self.assertIsNone(worker.poll(), 'renderer worker must remain alive for requests')
+                error = render_request(worker, valid.with_name('missing.md'))
+                self.assertFalse(error['ok'])
+                self.assertIn('missing.md', error['error'])
+                result = render_request(worker, valid)
+                self.assertTrue(result['ok'], result)
+            finally:
+                worker.stdin.close()
+                worker.wait(timeout=5)
+                worker.stdout.close()
 
 
 if __name__ == '__main__':

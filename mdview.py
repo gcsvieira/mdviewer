@@ -5,6 +5,7 @@ import html
 import json
 import math
 import re
+import select
 import shutil
 import struct
 import subprocess
@@ -189,6 +190,125 @@ def split_image(image: Path, directory: Path, max_height: int,
     return paths
 
 
+def start_renderer_worker():
+    if not shutil.which('xvfb-run'):
+        raise RuntimeError('xvfb-run is required for windowless WebKit rendering')
+    return subprocess.Popen(
+        ['xvfb-run', '-a', sys.executable, str(Path(__file__).resolve()), '--renderer-worker'],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+    )
+
+
+def request_render(worker, request: dict, timeout: int = 40) -> dict:
+    if worker.poll() is not None:
+        raise RuntimeError('WebKit renderer worker has stopped')
+    worker.stdin.write(json.dumps(request) + '\n')
+    worker.stdin.flush()
+    ready, _, _ = select.select([worker.stdout], [], [], timeout)
+    if not ready:
+        raise RuntimeError(f'WebKit renderer timed out after {timeout} seconds')
+    line = worker.stdout.readline()
+    if not line:
+        raise RuntimeError('WebKit renderer stopped before returning a result')
+    return json.loads(line)
+
+
+def renderer_worker() -> None:
+    """Serve JSON-line Markdown render requests on one private Xvfb display."""
+    import gi
+    gi.require_version('Gtk', '3.0')
+    gi.require_version('Gdk', '3.0')
+    gi.require_version('WebKit2', '4.1')
+    from gi.repository import Gdk, GLib, Gtk, WebKit2
+
+    window = Gtk.Window()
+    window.set_default_size(900, 700)
+    view = WebKit2.WebView()
+    view.get_settings().set_enable_javascript(True)
+    color = Gdk.RGBA()
+    color.parse('rgba(0,0,0,0)')
+    view.set_background_color(color)
+    window.add(view)
+    window.show_all()
+    previous = None
+
+    for line in sys.stdin:
+        state = {'done': False, 'response': None, 'timer': 0}
+
+        def finish(response):
+            if state['done']:
+                return
+            state['done'] = True
+            state['response'] = response
+            if state['timer']:
+                GLib.source_remove(state['timer'])
+            Gtk.main_quit()
+
+        try:
+            request = json.loads(line)
+            source = Path(request['path']).resolve()
+            markdown = source.read_text(encoding='utf-8')
+            width = int(request['width'])
+            page_height = int(request['page_height'])
+            row_height = int(request['row_height'])
+            if width < 64 or page_height < 1 or row_height < 1:
+                raise ValueError('width, page_height, and row_height must be positive')
+            if previous is not None:
+                previous.cleanup()
+            previous = tempfile.TemporaryDirectory(prefix='mdview-worker-')
+            root = Path(previous.name)
+            document, page = root / 'document.html', root / 'page.png'
+            boundaries_file = root / 'boundaries.json'
+            document.write_text(render_html(markdown, source.parent), encoding='utf-8')
+            window.resize(width, page_height)
+
+            def on_snapshot(webview, result, _data):
+                try:
+                    surface = webview.get_snapshot_finish(result)
+                    surface.write_to_png(str(page))
+                    boundaries = json.loads(boundaries_file.read_text(encoding='utf-8'))
+                    strips = split_image(page, root, page_height, row_height, boundaries)
+                    finish({'ok': True, 'strips': [str(path) for path in strips]})
+                except Exception as error:
+                    finish({'ok': False, 'error': str(error)})
+
+            def on_bounds(webview, result, _data):
+                try:
+                    value = webview.evaluate_javascript_finish(result)
+                    boundaries_file.write_text(value.to_string(), encoding='utf-8')
+                    webview.get_snapshot(WebKit2.SnapshotRegion.FULL_DOCUMENT,
+                                         WebKit2.SnapshotOptions.TRANSPARENT_BACKGROUND,
+                                         None, on_snapshot, None)
+                except Exception as error:
+                    finish({'ok': False, 'error': str(error)})
+
+            def on_load(_view, event):
+                if event == WebKit2.LoadEvent.FINISHED:
+                    script = "JSON.stringify([...document.querySelectorAll('h1,h2,h3,h4,h5,h6,p')].map(el => Math.round(el.getBoundingClientRect().top + window.scrollY)))"
+                    view.evaluate_javascript(script, -1, None, None, None, on_bounds, None)
+
+            def on_failed(_view, _event, _uri, error):
+                finish({'ok': False, 'error': error.message})
+                return True
+
+            view.connect('load-changed', on_load)
+            view.connect('load-failed', on_failed)
+            state['timer'] = GLib.timeout_add_seconds(
+                35, lambda: (finish({'ok': False, 'error': 'Rendering timed out after 35 seconds'}), False)[1])
+            view.load_uri(document.as_uri())
+            Gtk.main()
+            view.stop_loading()
+            view.disconnect_by_func(on_load)
+            view.disconnect_by_func(on_failed)
+            print(json.dumps(state['response']), flush=True)
+        except Exception as error:
+            print(json.dumps({'ok': False, 'error': str(error)}), flush=True)
+
+    if previous is not None:
+        previous.cleanup()
+    window.destroy()
+
+
 def terminal_size() -> tuple[int, int, int, int]:
     import fcntl
     import termios
@@ -250,7 +370,9 @@ def main() -> int:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) > 1 and sys.argv[1] == '--snapshot-worker':
+    if len(sys.argv) > 1 and sys.argv[1] == '--renderer-worker':
+        renderer_worker()
+    elif len(sys.argv) > 1 and sys.argv[1] == '--snapshot-worker':
         snapshot(Path(sys.argv[2]), Path(sys.argv[3]), int(sys.argv[4]), Path(sys.argv[5]))
     else:
         sys.exit(main())

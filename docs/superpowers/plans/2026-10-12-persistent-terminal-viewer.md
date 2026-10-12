@@ -57,11 +57,11 @@
 - Consumes: Task 1's block-aware `split_image`.
 - Produces: newline-delimited JSON worker protocol. Request: `{"path": "absolute/file.md", "width": 1200, "page_height": 700, "row_height": 20}`. Success response: `{"ok": true, "strips": ["/tmp/.../strip-00000.png"]}`. Failure response: `{"ok": false, "error": "message"}`. One response is written for each request.
 
-- [ ] Add a failing protocol test that sends two file requests to one worker and receives two successful responses from the same process ID.
-- [ ] Add a failing protocol test for a missing or unreadable file returning an error response without terminating the worker.
-- [ ] Run the focused worker tests; confirm they fail before the persistent worker exists.
-- [ ] Start Xvfb and GTK/WebKit once in a worker subprocess; process each JSON request with the same WebView and return PNG strips through response paths. Keep diagnostics on stderr and bound each request with a timeout.
-- [ ] Run the focused worker tests and existing renderer tests; confirm they pass.
+- [x] Add a failing protocol test that sends two file requests to one worker and receives two successful responses from the same process ID.
+- [x] Add a failing protocol test for a missing or unreadable file returning an error response without terminating the worker.
+- [x] Run the focused worker tests; confirm they fail before the persistent worker exists.
+- [x] Start Xvfb and GTK/WebKit once in a worker subprocess; process each JSON request with the same WebView and return PNG strips through response paths. Keep diagnostics on stderr and bound each request with a timeout.
+- [x] Run the focused worker tests and existing renderer tests; confirm they pass.
 
 ### Task 3: Add the picker, paged preview, and quick-view integration
 
