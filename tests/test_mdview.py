@@ -206,6 +206,16 @@ class TerminalNavigationTests(unittest.TestCase):
         self.assertEqual(mdview.scroll_offset(0, 'previous', 200, 80, 20), 0)
         self.assertEqual(mdview.scroll_offset(110, 'next', 200, 80, 20), 120)
         self.assertEqual(mdview.scroll_offset(0, 'next', 40, 80, 20), 0)
+        self.assertEqual(mdview.scroll_offset(60, 'top', 200, 80, 20), 0)
+        self.assertEqual(mdview.scroll_offset(60, 'bottom', 200, 80, 20), 120)
+        self.assertEqual(mdview.scroll_offset(0, 'bottom', 40, 80, 20), 0)
+
+    def test_gg_requires_two_consecutive_g_keys_and_other_keys_cancel_prefix(self):
+        self.assertEqual(mdview.navigation_input('picker', 'g', False), (None, True))
+        self.assertEqual(mdview.navigation_input('picker', 'g', True), ('top', False))
+        self.assertEqual(mdview.navigation_input('picker', 'j', True), ('down', False))
+        self.assertEqual(mdview.navigation_input('preview', 'q', True), ('back', False))
+        self.assertEqual(mdview.navigation_input('preview', 'G', True), ('bottom', False))
 
     def test_scrolling_viewport_preserves_pixels_across_strip_boundaries(self):
         image = Image.new('RGBA', (20, 200))
@@ -247,12 +257,18 @@ class TerminalNavigationTests(unittest.TestCase):
         self.assertEqual(action('preview', 'j'), 'next')
         self.assertEqual(action('preview', 'k'), 'previous')
         self.assertEqual(action('preview', 'q'), 'back')
+        for mode in ('picker', 'preview'):
+            self.assertEqual(action(mode, 'gg'), 'top')
+            self.assertEqual(action(mode, 'G'), 'bottom')
 
     def test_picker_selection_stays_within_file_list(self):
         move = getattr(mdview, 'move_selection', lambda index, action, count: index)
         self.assertEqual(move(0, 'up', 3), 0)
         self.assertEqual(move(0, 'down', 3), 1)
         self.assertEqual(move(2, 'down', 3), 2)
+        self.assertEqual(move(1, 'top', 3), 0)
+        self.assertEqual(move(1, 'bottom', 3), 2)
+        self.assertEqual(move(0, 'bottom', 0), 0)
 
     def test_picker_files_are_sorted_markdown_in_current_directory(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -285,7 +301,7 @@ class TerminalNavigationTests(unittest.TestCase):
     def test_picker_displays_rendered_png_for_selected_file(self):
         class Screen:
             def __init__(self):
-                self.keys = iter((13, ord('j'), ord('q'), ord('q')))
+                self.keys = iter((13, ord('j'), ord('G'), ord('g'), ord('g'), ord('q'), ord('q')))
 
             def erase(self): pass
             def clear(self): pass
@@ -303,10 +319,12 @@ class TerminalNavigationTests(unittest.TestCase):
             with patch('mdview.Path.cwd', return_value=root), \
                  patch('mdview.request_render', return_value={'ok': True, 'image': str(image), 'strips': [str(image)]}), \
                  patch('mdview.clear_kitty_images'), \
+                 patch('mdview.crop_viewport', wraps=mdview.crop_viewport) as crop, \
                  patch('mdview.display_kitty_image') as display:
                 mdview.picker(Screen(), object(), 8, 80, 640, 160)
             self.assertEqual(display.call_args_list[0].args[0], root / 'viewport.png')
-            self.assertEqual(display.call_count, 2, 'scrolling must redraw the viewport')
+            self.assertEqual(display.call_count, 4, 'scrolling and jumps must redraw the viewport')
+            self.assertEqual([call.args[1] for call in crop.call_args_list], [0, 20, 380, 0])
 
 if __name__ == '__main__':
     unittest.main()

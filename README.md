@@ -21,6 +21,8 @@ Open the Markdown picker for the current directory and its subdirectories:
 
 Use `j` and `k` to choose a file, Enter to preview it, and `q` to return to the list. Press `q` in the list to return to the shell. The WebKit renderer stays alive while you browse and runs on a private Xvfb display, so no window appears on your desktop.
 
+Use `gg` to jump to the first file or the top of the preview, and `G` to jump to the last file or the bottom of the preview.
+
 For one quick inline view that returns to the prompt:
 
 ```sh

@@ -296,14 +296,24 @@ def markdown_files(directory: Path) -> list[Path]:
 
 
 def navigation_action(mode: str, key: str) -> str | None:
+    if key in ('gg', 'G'):
+        return 'top' if key == 'gg' else 'bottom'
     if mode == 'picker':
         return {'j': 'down', 'k': 'up', '\n': 'open', '\r': 'open', 'ENTER': 'open', 'q': 'quit'}.get(key)
     return {'j': 'next', 'k': 'previous', 'q': 'back'}.get(key)
 
 
+def navigation_input(mode: str, key: str, pending_g: bool) -> tuple[str | None, bool]:
+    if key == 'g':
+        return (navigation_action(mode, 'gg'), False) if pending_g else (None, True)
+    return navigation_action(mode, key), False
+
+
 def move_selection(index: int, action: str, count: int) -> int:
     if count < 1:
         return 0
+    if action in ('top', 'bottom'):
+        return 0 if action == 'top' else count - 1
     if action == 'down':
         return min(index + 1, count - 1)
     if action == 'up':
@@ -333,6 +343,8 @@ def restore_picker(screen) -> None:
 
 
 def scroll_offset(offset: int, action: str, height: int, viewport_height: int, row_height: int) -> int:
+    if action in ('top', 'bottom'):
+        return 0 if action == 'top' else max(0, height - viewport_height)
     delta = row_height if action == 'next' else -row_height
     return max(0, min(offset + delta, max(0, height - viewport_height)))
 
@@ -383,7 +395,7 @@ def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
         put(row + 1, left, modified_ago(files[index]), accent if active else curses.A_DIM)
     if not files:
         put(start, left, 'No Markdown files found.', curses.A_DIM)
-    put(rows - 2, left, error or 'j/k move · Enter open · q quit', curses.A_DIM)
+    put(rows - 2, left, error or 'j/k move · gg/G top/bottom · Enter open · q quit', curses.A_DIM)
     screen.refresh()
 
 
@@ -391,7 +403,7 @@ def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, co
     screen.erase()
     put_text(screen, 0, 0, f' {title} ', curses.A_DIM)
     percent = round(offset / maximum * 100) if maximum else 100
-    put_text(screen, rows - 1, 0, f' j/k scroll · q files   {percent}% ', curses.A_DIM)
+    put_text(screen, rows - 1, 0, f' j/k scroll · gg/G top/bottom · q files   {percent}% ', curses.A_DIM)
     if rows < 3:
         screen.refresh()
         return
@@ -412,6 +424,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
     row_height = max(1, screen_height // rows)
     page_height = row_height * max(1, rows - 2)
     mode, image, offset, redraw = 'picker', None, 0, True
+    pending_g = False
 
     while True:
         current_rows, current_cols = screen.getmaxyx()
@@ -425,10 +438,10 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
             draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
             key = screen.getch()
             key_text = 'ENTER' if key in (10, 13, curses.KEY_ENTER) else chr(key) if 0 <= key < 256 else ''
-            action = navigation_action('picker', key_text)
+            action, pending_g = navigation_input('picker', key_text, pending_g)
             if action == 'quit':
                 return
-            if action in ('up', 'down'):
+            if action in ('up', 'down', 'top', 'bottom'):
                 selected = move_selection(selected, action, len(files))
             elif action == 'open' and files:
                 try:
@@ -455,11 +468,11 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 redraw = False
             key = screen.getch()
             key_text = chr(key) if 0 <= key < 256 else ''
-            action = navigation_action('preview', key_text)
+            action, pending_g = navigation_input('preview', key_text, pending_g)
             if action == 'back':
                 restore_picker(screen)
                 mode = 'picker'
-            elif action in ('next', 'previous'):
+            elif action in ('next', 'previous', 'top', 'bottom'):
                 new_offset = scroll_offset(offset, action, image.height, page_height, row_height)
                 redraw = new_offset != offset
                 offset = new_offset
