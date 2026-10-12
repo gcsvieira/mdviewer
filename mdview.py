@@ -350,12 +350,21 @@ def modified_ago(path: Path) -> str:
     return 'just now'
 
 
+def put_text(screen, row, column, text, attr=0):
+    rows, cols = screen.getmaxyx()
+    if 0 <= row < rows and 0 <= column < cols - 1:
+        try:
+            screen.addnstr(row, column, text, cols - column - 1, attr)
+        except curses.error:
+            # A resize can arrive between checking the bounds and writing.
+            pass
+
+
 def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge):
     screen.erase()
 
     def put(row, column, text, attr=0):
-        if 0 <= row < rows and column < cols - 1:
-            screen.addnstr(row, column, text, cols - column - 1, attr)
+        put_text(screen, row, column, text, attr)
 
     left = 3 if cols > 12 else 1
     put(1, left, ' MDVIEW ', badge | curses.A_BOLD)
@@ -380,10 +389,16 @@ def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
 
 def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, cols: int, rows: int) -> None:
     screen.erase()
-    screen.addnstr(0, 0, f' {title} ', max(1, cols - 1), curses.A_DIM)
+    put_text(screen, 0, 0, f' {title} ', curses.A_DIM)
     percent = round(offset / maximum * 100) if maximum else 100
-    screen.addnstr(rows - 1, 0, f' j/k scroll · q files   {percent}% ', max(1, cols - 1), curses.A_DIM)
-    screen.move(1, 0)
+    put_text(screen, rows - 1, 0, f' j/k scroll · q files   {percent}% ', curses.A_DIM)
+    if rows < 3:
+        screen.refresh()
+        return
+    try:
+        screen.move(1, 0)
+    except curses.error:
+        return
     screen.refresh()
     display_kitty_image(image)
 
@@ -399,6 +414,13 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
     mode, image, offset, redraw = 'picker', None, 0, True
 
     while True:
+        current_rows, current_cols = screen.getmaxyx()
+        if (current_rows, current_cols) != (rows, cols):
+            rows, cols = current_rows, current_cols
+            page_height = row_height * max(1, rows - 2)
+            if image is not None:
+                offset = min(offset, max(0, image.height - page_height))
+            redraw = True
         if mode == 'picker':
             draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
             key = screen.getch()

@@ -164,6 +164,43 @@ class RendererWorkerTests(unittest.TestCase):
 
 
 class TerminalNavigationTests(unittest.TestCase):
+    def test_resize_keeps_picker_and_preview_drawing_inside_current_bounds(self):
+        class Screen:
+            def __init__(self):
+                self.size = (24, 100)
+                self.events = iter(((mdview.curses.KEY_RESIZE, (6, 20)),
+                                    (13, None), (mdview.curses.KEY_RESIZE, (2, 8)),
+                                    (ord('q'), None), (mdview.curses.KEY_RESIZE, (24, 100)),
+                                    (ord('q'), None)))
+
+            def erase(self): pass
+            def clear(self): pass
+            def refresh(self): pass
+            def getmaxyx(self): return self.size
+            def addnstr(self, row, column, text, limit, attr=0):
+                rows, cols = self.size
+                if not (0 <= row < rows and 0 <= column < cols and column + limit < cols):
+                    raise AssertionError('drawing outside resized screen')
+            def move(self, row, column):
+                rows, cols = self.size
+                if not (0 <= row < rows and 0 <= column < cols):
+                    raise AssertionError('moving outside resized screen')
+            def getch(self):
+                key, size = next(self.events)
+                if size:
+                    self.size = size
+                return key
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'note.md').write_text('# Note', encoding='utf-8')
+            image = root / 'page.png'
+            Image.new('RGBA', (1000, 500)).save(image)
+            with patch('mdview.Path.cwd', return_value=root), \
+                 patch('mdview.request_render', return_value={'ok': True, 'image': str(image)}), \
+                 patch('mdview.clear_kitty_images'), patch('mdview.display_kitty_image'):
+                mdview.picker(Screen(), object(), 24, 100, 1000, 480)
+
     def test_scroll_moves_one_row_and_stops_at_document_edges(self):
         self.assertEqual(mdview.scroll_offset(0, 'next', 200, 80, 20), 20)
         self.assertEqual(mdview.scroll_offset(0, 'previous', 200, 80, 20), 0)
@@ -255,6 +292,7 @@ class TerminalNavigationTests(unittest.TestCase):
             def addnstr(self, *args): pass
             def refresh(self): pass
             def move(self, *args): pass
+            def getmaxyx(self): return (8, 80)
             def getch(self): return next(self.keys)
 
         with tempfile.TemporaryDirectory() as directory:

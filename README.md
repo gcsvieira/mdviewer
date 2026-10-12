@@ -29,6 +29,8 @@ For one quick inline view that returns to the prompt:
 
 In the preview, use `j`/`k` to scroll down/up one terminal row and `q` to return to the file list. The full document is rendered once; scrolling moves a viewport over that image. Images use the terminal's initial pixel width and stay left-aligned. Scroll view is the default; an optional paginated view is deferred.
 
+Resizing adjusts the menu and preview height without rerendering the document. Its original layout width is retained.
+
 The file list uses a magenta selection marker, relative paths, and modification times. Hidden directories and `node_modules` are excluded. The renderer forces GTK's X11 backend on the private Xvfb display, even in a Wayland session.
 
 Quick inline output and exports still use image strips. Long documents break before headings or paragraphs when possible, then split into row-aligned strips.
