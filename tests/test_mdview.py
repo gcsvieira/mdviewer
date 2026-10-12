@@ -201,13 +201,13 @@ class TerminalNavigationTests(unittest.TestCase):
         for mode in ('picker', 'preview'):
             for code, letter in ((mdview.curses.KEY_UP, 'k'), (mdview.curses.KEY_DOWN, 'j')):
                 self.assertEqual(mdview.navigation_action(mode, mdview.key_text(code)),
-                                 mdview.navigation_action(mode, letter))
+                                 mdview.navigation_action(mode, letter, True))
         for key in ('RIGHT', 'l'):
-            self.assertEqual(mdview.navigation_action('picker', key), 'open')
-            self.assertIsNone(mdview.navigation_action('preview', key))
+            self.assertEqual(mdview.navigation_action('picker', key, key == 'l'), 'open')
+            self.assertIsNone(mdview.navigation_action('preview', key, key == 'l'))
         for key in ('LEFT', 'h'):
-            self.assertEqual(mdview.navigation_action('preview', key), 'back')
-            self.assertIsNone(mdview.navigation_action('picker', key))
+            self.assertEqual(mdview.navigation_action('preview', key, key == 'h'), 'back')
+            self.assertEqual(mdview.navigation_action('picker', key, key == 'h'), 'back')
         self.assertEqual(mdview.key_text(mdview.curses.KEY_RIGHT), 'RIGHT')
         self.assertEqual(mdview.key_text(mdview.curses.KEY_LEFT), 'LEFT')
         self.assertEqual(mdview.key_text(mdview.curses.KEY_ENTER), 'ENTER')
@@ -225,9 +225,10 @@ class TerminalNavigationTests(unittest.TestCase):
                 self.size = (24, 100)
                 self.events = iter(((mdview.curses.KEY_RESIZE, (6, 20)),
                                     (mdview.curses.KEY_RIGHT, None), (mdview.curses.KEY_RESIZE, (2, 8)),
-                                    (ord('h'), None), (mdview.curses.KEY_RESIZE, (24, 100)),
+                                    (mdview.curses.KEY_LEFT, None), (mdview.curses.KEY_RESIZE, (24, 100)),
                                     (ord('q'), None)))
 
+            def timeout(self, milliseconds): pass
             def erase(self): pass
             def clear(self): pass
             def refresh(self): pass
@@ -266,11 +267,11 @@ class TerminalNavigationTests(unittest.TestCase):
         self.assertEqual(mdview.scroll_offset(0, 'bottom', 40, 80, 20), 0)
 
     def test_gg_requires_two_consecutive_g_keys_and_other_keys_cancel_prefix(self):
-        self.assertEqual(mdview.navigation_input('picker', 'g', False), (None, True))
-        self.assertEqual(mdview.navigation_input('picker', 'g', True), ('top', False))
-        self.assertEqual(mdview.navigation_input('picker', 'j', True), ('down', False))
+        self.assertEqual(mdview.navigation_input('picker', 'g', False, True), (None, True))
+        self.assertEqual(mdview.navigation_input('picker', 'g', True, True), ('top', False))
+        self.assertEqual(mdview.navigation_input('picker', 'j', True, True), ('down', False))
         self.assertEqual(mdview.navigation_input('preview', 'q', True), ('quit', False))
-        self.assertEqual(mdview.navigation_input('preview', 'G', True), ('bottom', False))
+        self.assertEqual(mdview.navigation_input('preview', 'G', True, True), ('bottom', False))
         self.assertEqual(mdview.navigation_input('picker', 'DOWN', True), ('down', False))
         for mode in ('picker', 'preview'):
             self.assertEqual(mdview.navigation_input(mode, 'e', True), ('edit', False))
@@ -306,7 +307,7 @@ class TerminalNavigationTests(unittest.TestCase):
             self.assertIn('m=0;', commands[-1])
 
     def test_vim_keys_map_to_picker_and_preview_actions(self):
-        action = getattr(mdview, 'navigation_action', lambda *_: None)
+        action = lambda mode, key: mdview.navigation_action(mode, key, True)
         self.assertEqual(action('picker', 'j'), 'down')
         self.assertEqual(action('picker', 'k'), 'up')
         for key in ('\n', '\r', 'ENTER'):
@@ -339,7 +340,7 @@ class TerminalNavigationTests(unittest.TestCase):
             (root / '.hidden').mkdir()
             (root / '.hidden' / 'ignored.md').touch()
             self.assertEqual([str(p.relative_to(root)) for p in mdview.markdown_files(root)],
-                             ['a.markdown', 'sub/nested.md', 'z.MD'])
+                             ['a.markdown', 'z.MD'])
 
     def test_returning_from_preview_clears_image_before_picker_redraw(self):
         events = []
@@ -360,8 +361,9 @@ class TerminalNavigationTests(unittest.TestCase):
         class Screen:
             def __init__(self):
                 self.keys = iter((mdview.curses.KEY_RIGHT, mdview.curses.KEY_DOWN,
-                                  mdview.curses.KEY_END, mdview.curses.KEY_HOME, ord('h'), ord('q')))
+                                  mdview.curses.KEY_END, mdview.curses.KEY_HOME, mdview.curses.KEY_LEFT, ord('q')))
 
+            def timeout(self, milliseconds): pass
             def erase(self): pass
             def clear(self): pass
             def addnstr(self, *args): pass

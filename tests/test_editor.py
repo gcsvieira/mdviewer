@@ -19,6 +19,7 @@ class Screen:
 
     def getmaxyx(self): return self.size
     def getch(self): return next(self.keys)
+    def timeout(self, milliseconds): pass
     def erase(self): pass
     def move(self, *args): pass
     def addnstr(self, row, column, text, *args): self.text.append(text)
@@ -108,8 +109,8 @@ class EditorPickerTests(unittest.TestCase):
         self.stack.enter_context(patch('mdview.clear_kitty_images'))
         self.stack.enter_context(patch('mdview.display_kitty_image'))
 
-    def run_picker(self, screen):
-        mdview.picker(screen, self.worker, 8, 80, 640, 160)
+    def run_picker(self, screen, settings=None):
+        mdview.picker(screen, self.worker, 8, 80, 640, 160, settings=settings or mdview.Settings(vim_mode=True))
 
     def test_enter_does_not_open_selected_file(self):
         for key in (10, 13, mdview.curses.KEY_ENTER):
@@ -122,15 +123,22 @@ class EditorPickerTests(unittest.TestCase):
              patch('mdview.restore_picker') as restore, patch('mdview.clear_kitty_images') as clear:
             self.run_picker(Screen((ord('l'), ord('q'))))
         restore.assert_not_called()
-        self.assertEqual(clear.call_count, 2, 'clear before displaying and when quitting')
+        self.assertEqual(clear.call_count, 3, 'clear before loading, displaying, and quitting')
 
     def test_percentage_jumps_with_G_and_enter_match_preview_progress(self):
-        keys = [ord('l'), *map(ord, '22G50\n100G0G50'), mdview.curses.KEY_ENTER,
-                ord('0'), 13, ord('G'), ord('q')]
-        with patch('mdview.request_render', return_value={'ok': True, 'image': str(self.page)}), \
-             patch('mdview.crop_viewport', wraps=mdview.crop_viewport) as crop:
-            self.run_picker(Screen(keys))
-        self.assertEqual([call.args[1] for call in crop.call_args_list], [0, 84, 190, 380, 0, 190, 0, 380])
+        for vim in (False, True):
+            opening = ord('l') if vim else mdview.curses.KEY_RIGHT
+            ending = ord('G') if vim else mdview.curses.KEY_END
+            keys = [opening]
+            for percent in (22, 50, 100, 0, 50, 0):
+                keys.extend(map(ord, str(percent)))
+                keys.append(ord('G') if vim else 13)
+            keys.extend((ending, ord('q')))
+            with self.subTest(vim=vim), \
+                 patch('mdview.request_render', return_value={'ok': True, 'image': str(self.page)}), \
+                 patch('mdview.crop_viewport', wraps=mdview.crop_viewport) as crop:
+                self.run_picker(Screen(keys), mdview.Settings(vim_mode=vim))
+                self.assertEqual([call.args[1] for call in crop.call_args_list], [0, 84, 190, 380, 0, 190, 0, 380])
 
     def test_percentage_input_rejects_out_of_range_and_can_be_cancelled_or_corrected(self):
         cases = (([*map(ord, '101G')], 0, 'between 0 and 100'),

@@ -23,6 +23,7 @@ from pathlib import Path
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 from PIL import Image
+from mdview_settings import OPTIONS, Settings, load_settings, save_settings
 
 
 STYLE = """
@@ -63,7 +64,7 @@ hr { border: 0; border-top: 1px solid rgba(180,180,180,.3); margin: 24px 0; }
 """
 
 
-def render_html(source: str, base: Path) -> str:
+def render_html(source: str, base: Path, element_color: str = 'white') -> str:
     md = MarkdownIt('commonmark', {'html': False}).enable('table').enable('strikethrough')
     tokens = md.parse(source)
     stack = []
@@ -94,10 +95,20 @@ def render_html(source: str, base: Path) -> str:
             output.append(title)
     body = md.renderer.render(output, md.options, {})
     csp = "default-src 'none'; img-src file: data:; style-src 'unsafe-inline'; font-src file: data:; base-uri file: data:"
+    style = STYLE
+    if element_color == 'black':
+        style += '''
+body, h1, h2, h3, h4, h5, h6, blockquote, .callout-title { color: #171717; }
+a { color: #49318a; }
+th, td { border-color: rgba(0,0,0,.3); }
+hr { border-top-color: rgba(0,0,0,.3); }
+code, pre, th { background: rgba(0,0,0,.08); }
+pre code { background: transparent; }
+'''
     return ('<!doctype html><html><head><meta charset="utf-8">'
             f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
             f'<base href="{html.escape(base.resolve().as_uri() + "/", quote=True)}">'
-            f'<style>{STYLE}</style></head><body><main>{body}</main></body></html>')
+            f'<style>{style}</style></head><body><main>{body}</main></body></html>')
 
 
 def split_image(image: Path, directory: Path, max_height: int,
@@ -150,7 +161,8 @@ def start_renderer_worker():
         os.close(response_write)
     worker.stdout = os.fdopen(response_read, 'r')
     worker.responses = queue.Queue()
-    threading.Thread(target=_read_worker_responses, args=(worker,), daemon=True).start()
+    worker.response_reader = threading.Thread(target=_read_worker_responses, args=(worker,), daemon=True)
+    worker.response_reader.start()
     return worker
 
 
@@ -160,21 +172,50 @@ def _read_worker_responses(worker) -> None:
     worker.responses.put(None)
 
 
-def request_render(worker, request: dict, timeout: int = 40) -> dict:
+class QuitViewer(Exception):
+    """A quit request while waiting for a render."""
+
+
+def stop_renderer_worker(worker) -> None:
+    try:
+        isolated = os.getpgid(worker.pid) == worker.pid
+        if isolated:
+            os.killpg(worker.pid, signal.SIGTERM)
+        else:
+            worker.terminate()
+        try:
+            worker.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if isolated:
+                os.killpg(worker.pid, signal.SIGKILL)
+            else:
+                worker.kill()
+            worker.wait()
+    except ProcessLookupError:
+        worker.wait()
+
+
+def request_render(worker, request: dict, timeout: int = 40, progress=None) -> dict:
     if worker.poll() is not None:
         raise RuntimeError('WebKit renderer worker has stopped')
     worker.stdin.write(json.dumps(request) + '\n')
     worker.stdin.flush()
-    try:
-        line = worker.responses.get(timeout=timeout)
-    except queue.Empty:
-        worker.terminate()
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            stop_renderer_worker(worker)
+            raise RuntimeError(f'WebKit renderer timed out after {timeout} seconds')
         try:
-            worker.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            worker.kill()
-            worker.wait()
-        raise RuntimeError(f'WebKit renderer timed out after {timeout} seconds')
+            line = worker.responses.get(timeout=min(.1, remaining) if progress else remaining)
+            break
+        except queue.Empty:
+            if progress:
+                try:
+                    progress()
+                except QuitViewer:
+                    stop_renderer_worker(worker)
+                    raise
     if not line:
         raise RuntimeError('WebKit renderer stopped before returning a result')
     return json.loads(line)
@@ -227,7 +268,7 @@ def renderer_worker() -> None:
             root = Path(previous.name)
             document, page = root / 'document.html', root / 'page.png'
             boundaries_file = root / 'boundaries.json'
-            document.write_text(render_html(markdown, source.parent), encoding='utf-8')
+            document.write_text(render_html(markdown, source.parent, request.get('element_color', 'white')), encoding='utf-8')
             window.resize(width, page_height)
 
             def on_snapshot(webview, result, _data):
@@ -236,7 +277,8 @@ def renderer_worker() -> None:
                     surface.write_to_png(str(page))
                     boundaries = json.loads(boundaries_file.read_text(encoding='utf-8'))
                     strips = split_image(page, root, page_height, row_height, boundaries)
-                    finish({'ok': True, 'image': str(page), 'strips': [str(path) for path in strips]})
+                    finish({'ok': True, 'image': str(page), 'boundaries': boundaries,
+                            'strips': [str(path) for path in strips]})
                 except Exception as error:
                     finish({'ok': False, 'error': str(error)})
 
@@ -289,12 +331,16 @@ def terminal_size() -> tuple[int, int, int, int]:
 
 
 def markdown_files(directory: Path) -> list[Path]:
-    files = []
-    for root, directories, names in os.walk(directory):
-        directories[:] = [name for name in directories if not name.startswith('.') and name != 'node_modules']
-        files.extend(Path(root) / name for name in names
-                     if not name.startswith('.') and Path(name).suffix.lower() in {'.md', '.markdown'})
-    return sorted(files, key=lambda path: str(path.relative_to(directory)).casefold())
+    return sorted((path for path in directory.iterdir() if not path.name.startswith('.')
+                   and path.is_file() and path.suffix.lower() in {'.md', '.markdown'}),
+                  key=lambda path: path.name.casefold())
+
+
+def directory_entries(directory: Path) -> list[Path]:
+    folders = sorted((path for path in directory.iterdir() if path.is_dir()
+                      and not path.name.startswith('.') and path.name != 'node_modules'),
+                     key=lambda path: path.name.casefold())
+    return folders + markdown_files(directory)
 
 
 def key_text(key: int) -> str:
@@ -304,22 +350,29 @@ def key_text(key: int) -> str:
     return special.get(key, chr(key) if 0 <= key < 256 else '')
 
 
-def navigation_action(mode: str, key: str) -> str | None:
-    key = {'UP': 'k', 'DOWN': 'j', 'HOME': 'gg', 'END': 'G',
-           'RIGHT': 'l', 'LEFT': 'h'}.get(key, key)
-    if key == 'e':
+def navigation_action(mode: str, key: str, vim_mode: bool = False) -> str | None:
+    if key == 'q':
+        return 'quit'
+    if key == 's' and mode == 'picker':
+        return 'settings'
+    if mode == 'settings' and key in ('s', '\x1b'):
+        return 'back'
+    if key == 'e' and mode != 'settings':
         return 'edit'
-    if key in ('gg', 'G'):
-        return 'top' if key == 'gg' else 'bottom'
-    if mode == 'picker':
-        return {'j': 'down', 'k': 'up', 'l': 'open', 'q': 'quit'}.get(key)
-    return {'j': 'next', 'k': 'previous', 'h': 'back', 'q': 'quit'}.get(key)
+    keys = ({'k': 'up', 'j': 'down', 'h': 'back', 'l': 'open', 'gg': 'top', 'G': 'bottom'}
+            if vim_mode else {'UP': 'up', 'DOWN': 'down', 'LEFT': 'back', 'RIGHT': 'open',
+                              'HOME': 'top', 'END': 'bottom'})
+    action = keys.get(key)
+    if mode == 'preview':
+        return {'up': 'previous', 'down': 'next', 'back': 'back',
+                'top': 'top', 'bottom': 'bottom'}.get(action)
+    return action
 
 
-def navigation_input(mode: str, key: str, pending_g: bool) -> tuple[str | None, bool]:
-    if key == 'g':
-        return (navigation_action(mode, 'gg'), False) if pending_g else (None, True)
-    return navigation_action(mode, key), False
+def navigation_input(mode: str, key: str, pending_g: bool, vim_mode: bool = False) -> tuple[str | None, bool]:
+    if key == 'g' and vim_mode:
+        return (navigation_action(mode, 'gg', True), False) if pending_g else (None, True)
+    return navigation_action(mode, key, vim_mode), False
 
 
 def editor_command(path: Path) -> list[str]:
@@ -362,17 +415,48 @@ def edit_file(screen, path: Path) -> str | None:
     return error
 
 
-def load_document(worker, path: Path, width: int, page_height: int, row_height: int) -> tuple[Image.Image, Path]:
-    response = request_render(worker, {
-        'path': str(path.resolve()), 'width': width,
-        'page_height': page_height, 'row_height': row_height,
-    })
+def draw_loading(screen, path: Path, frame: int) -> None:
+    rows, cols = screen.getmaxyx()
+    screen.erase()
+    put_text(screen, max(0, rows // 2 - 1), 1, f'Opening {path.name}…')
+    bar = [' '] * 20
+    for index in range(4):
+        bar[(frame + index) % len(bar)] = '━'
+    put_text(screen, rows // 2, 1, '[' + ''.join(bar) + ']')
+    put_text(screen, rows - 1, 0, ' q quit ', curses.A_DIM)
+    screen.refresh()
+
+
+def load_document(worker, path: Path, width: int, page_height: int, row_height: int,
+                  settings: Settings | None = None, screen=None) -> tuple[Image.Image, Path, list[int]]:
+    settings = settings or Settings()
+    progress = None
+    if screen is not None:
+        clear_kitty_images()
+        screen.timeout(0)
+        draw_loading(screen, path, 0)
+        frame = 0
+
+        def progress():
+            nonlocal frame
+            frame += 1
+            draw_loading(screen, path, frame)
+            if screen.getch() == ord('q'):
+                raise QuitViewer()
+    try:
+        response = request_render(worker, {
+            'path': str(path.resolve()), 'width': width, 'element_color': settings.element_color,
+            'page_height': page_height, 'row_height': row_height,
+        }, progress=progress)
+    finally:
+        if screen is not None:
+            screen.timeout(500)
     if not response.get('ok'):
         raise RuntimeError(response.get('error', 'Rendering failed'))
     image_path = Path(response['image'])
     with Image.open(image_path) as source:
         image = source.convert('RGBA')
-    return image, image_path.parent / 'viewport.png'
+    return image, image_path.parent / 'viewport.png', response.get('boundaries', [])
 
 
 def move_selection(index: int, action: str, count: int) -> int:
@@ -421,12 +505,32 @@ def percentage_offset(percent: int, height: int, viewport_height: int) -> int:
     return round(max(0, height - viewport_height) * percent / 100)
 
 
+def page_offsets(height: int, viewport_height: int, row_height: int, boundaries: list[int]) -> list[int]:
+    tops = [0]
+    boundaries = sorted(set(boundaries))
+    while height - tops[-1] > viewport_height:
+        limit = tops[-1] + viewport_height
+        candidates = [top for top in boundaries if tops[-1] < top <= limit]
+        end = max(candidates) if candidates else max(tops[-1] + 1, limit // row_height * row_height)
+        tops.append(end)
+    return tops
+
+
+def page_for_percentage(percent: int, pages: list[int]) -> int:
+    if not 0 <= percent <= 100:
+        raise ValueError('Percentage must be between 0 and 100')
+    return round((len(pages) - 1) * percent / 100)
+
+
 def crop_viewport(image: Image.Image, offset: int, height: int) -> Image.Image:
     return image.crop((0, offset, image.width, min(image.height, offset + height)))
 
 
 def modified_ago(path: Path) -> str:
-    seconds = max(0, int(time.time() - path.stat().st_mtime))
+    try:
+        seconds = max(0, int(time.time() - path.stat().st_mtime))
+    except OSError:
+        return 'unavailable'
     for unit, size in (('day', 86400), ('hour', 3600), ('minute', 60)):
         if seconds >= size:
             count = seconds // size
@@ -444,7 +548,9 @@ def put_text(screen, row, column, text, attr=0):
             pass
 
 
-def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge):
+def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge, settings=None):
+    settings = settings or Settings()
+    muted = 0 if settings.element_color == 'black' else curses.A_DIM
     screen.erase()
 
     def put(row, column, text, attr=0):
@@ -452,7 +558,11 @@ def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
 
     left = 3 if cols > 12 else 1
     put(1, left, ' MDVIEW ', badge | curses.A_BOLD)
-    put(3, left, f'{len(files)} document{"s" if len(files) != 1 else ""}', curses.A_DIM)
+    location = str(root)
+    available_width = max(1, cols - left - 1)
+    if len(location) > available_width:
+        location = '…' + location[-max(1, available_width - 1):]
+    put(3, left, location, muted)
     start, spacing = (5, 3) if rows >= 12 else (3, 2)
     available = max(1, (rows - 2 - start) // spacing)
     first = max(0, selected - available + 1)
@@ -463,21 +573,30 @@ def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
         if active:
             put(row, left - 2, '│', accent)
             put(row + 1, left - 2, '│', accent)
-        put(row, left, str(files[index].relative_to(root)), attr)
-        put(row + 1, left, modified_ago(files[index]), accent if active else curses.A_DIM)
+        put(row, left, files[index].name + ('/' if files[index].is_dir() else ''), attr)
+        put(row + 1, left, modified_ago(files[index]), accent if active else muted)
     if not files:
-        put(start, left, 'No Markdown files found.', curses.A_DIM)
-    put(rows - 2, left, error or '↑/↓ j/k move · Home/End gg/G · →/l open · e edit · q quit', curses.A_DIM)
+        put(start, left, 'No folders or Markdown files found.', muted)
+    keys = 'j/k move · gg/G · l open · h parent' if settings.vim_mode else '↑/↓ move · Home/End · → open · ← parent'
+    put(rows - 2, left, error or f'{keys} · e edit · s settings · q quit', muted)
     screen.refresh()
 
 
 def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, cols: int, rows: int,
-                  error: str | None = None) -> None:
+                  error: str | None = None, settings=None, page_index=None, page_count=None) -> None:
+    settings = settings or Settings()
+    muted = 0 if settings.element_color == 'black' else curses.A_DIM
     screen.erase()
-    put_text(screen, 0, 0, f' {title} ', curses.A_DIM)
+    put_text(screen, 0, 0, f' {title} ', muted)
     percent = round(offset / maximum * 100) if maximum else 100
+    page_label = ''
+    if page_index is not None:
+        percent = round(page_index / (page_count - 1) * 100) if page_count > 1 else 100
+        page_label = f'page {page_index + 1}/{page_count} · '
+    motion = 'page' if settings.file_navigation_style == 'paginated' else 'scroll'
+    keys = f'j/k {motion} · gg/G · h files' if settings.vim_mode else f'↑/↓ {motion} · Home/End · ← files'
     put_text(screen, rows - 1, 0,
-             error or f' ↑/↓ j/k scroll · Home/End gg/G · e edit · ←/h files · q quit   {percent}% ', curses.A_DIM)
+             error or f' {keys} · e edit · q quit   {page_label}{percent}% ', muted)
     if rows < 3:
         screen.refresh()
         return
@@ -489,17 +608,55 @@ def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, co
     display_kitty_image(image)
 
 
+def apply_palette(screen, settings: Settings) -> None:
+    if curses.has_colors():
+        foreground = curses.COLOR_BLACK if settings.element_color == 'black' else curses.COLOR_WHITE
+        magenta = curses.COLOR_MAGENTA if settings.element_color == 'black' or curses.COLORS < 256 else 213
+        curses.init_pair(1, magenta, -1)
+        curses.init_pair(3, foreground, -1)
+        screen.bkgd(' ', curses.color_pair(3))
+
+
+def draw_settings(screen, settings, selected, error, accent, badge):
+    muted = 0 if settings.element_color == 'black' else curses.A_DIM
+    rows, cols = screen.getmaxyx()
+    screen.erase()
+    put_text(screen, 0, 1, ' SETTINGS ', badge | curses.A_BOLD)
+    start, spacing = (3, 2) if rows >= 12 else (2, 1)
+    for index, (name, _) in enumerate(OPTIONS):
+        value = getattr(settings, name.replace('-', '_'))
+        value = ('on' if value else 'off') if isinstance(value, bool) else value
+        attr = accent | curses.A_BOLD if index == selected else 0
+        put_text(screen, start + index * spacing, 1, f'{"›" if index == selected else " "} {name}: {value}', attr)
+    keys = 'j/k select · l change · h back' if settings.vim_mode else '↑/↓ select · → change · ← back'
+    put_text(screen, rows - 1, 0, error or f' {keys} · s/Esc back · q quit ', muted)
+    screen.refresh()
+
+
+def position_preview(image, boundaries, page_height, row_height, settings, offset):
+    pages = page_offsets(image.height, page_height, row_height, boundaries)
+    page_index = min(range(len(pages)), key=lambda index: abs(pages[index] - offset))
+    if settings.file_navigation_style == 'paginated':
+        offset = pages[page_index]
+    else:
+        offset = min(offset, max(0, image.height - page_height))
+    return pages, page_index, offset
+
+
 def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
-           accent: int = 0, badge: int = curses.A_REVERSE) -> None:
-    root = Path.cwd()
-    files = markdown_files(root)
-    selected = 0
+           accent: int = 0, badge: int = curses.A_REVERSE, settings: Settings | None = None) -> None:
+    settings = settings or Settings()
+    root = directory = Path.cwd()
+    files = directory_entries(directory)
+    selected, settings_selected = 0, 0
+    remembered = {}
     error = None
     row_height = max(1, screen_height // rows)
     page_height = row_height * max(1, rows - 2)
     mode, image, offset, redraw = 'picker', None, 0, True
-    pending_g = False
-    pending_percentage = ''
+    boundaries, pages, page_index = [], [0], 0
+    pending_g, pending_percentage = False, ''
+    screen.timeout(500)
 
     while True:
         current_rows, current_cols = screen.getmaxyx()
@@ -507,46 +664,120 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
             rows, cols = current_rows, current_cols
             page_height = row_height * max(1, rows - 2)
             if image is not None:
-                offset = min(offset, max(0, image.height - page_height))
+                pages, page_index, offset = position_preview(image, boundaries, page_height,
+                                                            row_height, settings, offset)
             redraw = True
-        if mode == 'picker':
-            draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
+        if mode == 'settings':
+            draw_settings(screen, settings, settings_selected, error, accent, badge)
             key = screen.getch()
-            action, pending_g = navigation_input('picker', key_text(key), pending_g)
+            if key == -1:
+                continue
+            text = key_text(key)
+            action, pending_g = navigation_input(mode, text, pending_g, settings.vim_mode)
             if action == 'quit':
                 return
-            if action in ('up', 'down', 'top', 'bottom'):
-                selected = move_selection(selected, action, len(files))
-            elif action == 'open' and files:
+            if action == 'back':
+                mode, error, pending_g = 'picker', None, False
+            elif action in ('up', 'down', 'top', 'bottom'):
+                settings_selected = move_selection(settings_selected, action, len(OPTIONS))
+            elif action == 'open' or text == ' ':
+                name, choices = OPTIONS[settings_selected]
+                attribute = name.replace('-', '_')
+                current = getattr(settings, attribute)
+                setattr(settings, attribute, choices[(choices.index(current) + 1) % len(choices)])
+                pending_g = False
+                apply_palette(screen, settings)
                 try:
-                    image, viewport = load_document(worker, files[selected], width, page_height, row_height)
-                    offset, redraw = 0, True
-                    mode, error = 'preview', None
+                    save_settings(settings)
+                    error = None
+                except OSError as exception:
+                    error = f'Could not save settings: {exception}'
+            continue
+        if mode == 'picker':
+            old_path = files[selected] if files else None
+            try:
+                refreshed = directory_entries(directory)
+                selected = refreshed.index(old_path) if old_path in refreshed else min(selected, max(0, len(refreshed) - 1))
+                files = refreshed
+            except OSError as exception:
+                error = str(exception)
+            draw_picker(screen, files, selected, directory, rows, cols, error, accent, badge, settings)
+            key = screen.getch()
+            if key == -1:
+                continue
+            action, pending_g = navigation_input(mode, key_text(key), pending_g, settings.vim_mode)
+            if action == 'quit':
+                return
+            if action == 'settings':
+                mode, error, pending_g = 'settings', None, False
+            elif action in ('up', 'down', 'top', 'bottom'):
+                selected = move_selection(selected, action, len(files))
+            elif action == 'back' and directory != root:
+                try:
+                    refreshed = directory_entries(directory.parent)
+                    remembered[directory] = files[selected] if files else None
+                    old_directory, directory = directory, directory.parent
+                    files = refreshed
+                    selected = files.index(old_directory) if old_directory in files else 0
+                    error = None
+                except OSError as exception:
+                    error = str(exception)
+            elif action == 'open' and files:
+                path = files[selected]
+                try:
+                    if path.is_dir():
+                        refreshed = directory_entries(path)
+                        remembered[directory] = path
+                        directory, files = path, refreshed
+                        remembered_path = remembered.get(directory)
+                        selected = files.index(remembered_path) if remembered_path in files else 0
+                        error = None
+                    else:
+                        image, viewport, boundaries = load_document(worker, path, width, page_height,
+                                                                    row_height, settings, screen)
+                        pages, page_index, offset = position_preview(image, boundaries, page_height,
+                                                                    row_height, settings, 0)
+                        redraw, mode, error = True, 'preview', None
+                except QuitViewer:
+                    return
                 except (OSError, RuntimeError, ValueError, KeyError) as exception:
                     error = str(exception)
         else:
+            paginated = settings.file_navigation_style == 'paginated'
             if redraw:
-                crop_viewport(image, offset, page_height).save(viewport)
+                height = (pages[page_index + 1] - offset
+                          if paginated and page_index + 1 < len(pages) else page_height)
+                crop_viewport(image, offset, height).save(viewport)
                 clear_kitty_images()
                 show_viewport(screen, viewport, str(files[selected].relative_to(root)), offset,
-                              max(0, image.height - page_height), cols, rows, error)
+                              max(0, image.height - page_height), cols, rows, error, settings,
+                              page_index if paginated else None, len(pages) if paginated else None)
                 redraw = False
             key = screen.getch()
+            if key == -1:
+                continue
             text = key_text(key)
             digit = bool(text) and text in '0123456789'
             if digit or (pending_percentage and key in (curses.KEY_BACKSPACE, 8, 127)):
                 pending_percentage = pending_percentage + text if digit else pending_percentage[:-1]
                 pending_g, error = False, None
                 if pending_percentage:
-                    hint = f' Jump to: {pending_percentage}% · G/Enter confirm · Esc cancel '
+                    terminator = 'G' if settings.vim_mode else 'Enter'
+                    hint = f' Jump to: {pending_percentage}% · {terminator} confirm · Esc cancel '
                     put_text(screen, rows - 1, 0, hint.ljust(max(1, cols - 1)), curses.A_DIM)
                     screen.refresh()
                 else:
                     redraw = True
                 continue
-            if pending_percentage and text in ('G', '\n', '\r', 'ENTER'):
+            confirm = text == 'G' if settings.vim_mode else text in ('\n', '\r', 'ENTER')
+            if pending_percentage and confirm:
                 try:
-                    offset = percentage_offset(int(pending_percentage), image.height, page_height)
+                    percent = int(pending_percentage)
+                    if paginated:
+                        page_index = page_for_percentage(percent, pages)
+                        offset = pages[page_index]
+                    else:
+                        offset = percentage_offset(percent, image.height, page_height)
                     error = None
                 except ValueError:
                     error = 'Percentage must be between 0 and 100'
@@ -557,7 +788,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
             if key == 27:
                 pending_g, error, redraw = False, None, True
                 continue
-            action, pending_g = navigation_input('preview', text, pending_g)
+            action, pending_g = navigation_input(mode, text, pending_g, settings.vim_mode)
             if action == 'quit':
                 clear_kitty_images()
                 return
@@ -565,14 +796,23 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 restore_picker(screen)
                 mode = 'picker'
             elif action in ('next', 'previous', 'top', 'bottom'):
-                new_offset = scroll_offset(offset, action, image.height, page_height, row_height)
+                if paginated:
+                    direction = {'next': 'down', 'previous': 'up'}.get(action, action)
+                    page_index = move_selection(page_index, direction, len(pages))
+                    new_offset = pages[page_index]
+                else:
+                    new_offset = scroll_offset(offset, action, image.height, page_height, row_height)
                 redraw = redraw or new_offset != offset
                 offset = new_offset
-        if action == 'edit' and files:
+        if action == 'edit' and files and files[selected].is_file():
             path = files[selected]
             error = edit_file(screen, path)
-            pending_g = False
-            files = markdown_files(root)
+            pending_g, pending_percentage = False, ''
+            try:
+                files = directory_entries(directory)
+            except OSError as exception:
+                error = str(exception)
+                files = []
             selected = files.index(path) if path in files else min(selected, max(0, len(files) - 1))
             rows, cols = screen.getmaxyx()
             page_height = row_height * max(1, rows - 2)
@@ -580,16 +820,21 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                 try:
                     if not path.is_file():
                         raise RuntimeError(f'File no longer exists: {path.name}')
-                    image, viewport = load_document(worker, path, width, page_height, row_height)
-                    offset = min(offset, max(0, image.height - page_height))
+                    image, viewport, boundaries = load_document(worker, path, width, page_height,
+                                                                row_height, settings, screen)
+                    pages, page_index, offset = position_preview(image, boundaries, page_height,
+                                                                row_height, settings, offset)
                     redraw = True
+                except QuitViewer:
+                    return
                 except (OSError, RuntimeError, ValueError, KeyError) as exception:
                     error = f'{error}; {exception}' if error else str(exception)
                     restore_picker(screen)
                     mode = 'picker'
 
 
-def run_picker(screen, worker, rows, cols, width, screen_height):
+def run_picker(screen, worker, rows, cols, width, screen_height, settings=None):
+    settings = settings or load_settings()
     curses.curs_set(0)
     accent, badge = 0, curses.A_REVERSE
     if curses.has_colors():
@@ -599,17 +844,21 @@ def run_picker(screen, worker, rows, cols, width, screen_height):
         curses.init_pair(1, magenta, -1)
         curses.init_pair(2, curses.COLOR_WHITE, magenta)
         accent, badge = curses.color_pair(1), curses.color_pair(2)
-    picker(screen, worker, rows, cols, width, screen_height, accent, badge)
+    apply_palette(screen, settings)
+    picker(screen, worker, rows, cols, width, screen_height, accent, badge, settings)
 
 
 def close_renderer_worker(worker) -> None:
-    if worker.poll() is None:
+    if not worker.stdin.closed:
         worker.stdin.close()
+    if worker.poll() is None:
         try:
             worker.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            worker.terminate()
-            worker.wait(timeout=5)
+            stop_renderer_worker(worker)
+    reader = getattr(worker, 'response_reader', None)
+    if reader is not None:
+        reader.join(timeout=1)
     worker.stdout.close()
 
 
@@ -627,6 +876,7 @@ def main() -> int:
     if not args.file and (not sys.stdin.isatty() or not sys.stdout.isatty()):
         parser.error('the file picker requires an interactive terminal')
     try:
+        settings = load_settings()
         if args.file:
             if args.output:
                 width, page_height, row_height = args.width, args.strip_height, 1
@@ -648,6 +898,7 @@ def main() -> int:
             if args.file:
                 response = request_render(worker, {
                     'path': str(args.file.resolve()), 'width': width,
+                    'element_color': settings.element_color,
                     'page_height': page_height, 'row_height': row_height,
                 })
                 if not response.get('ok'):
@@ -666,7 +917,7 @@ def main() -> int:
                         *map(str, strips),
                     ], check=True)
             else:
-                curses.wrapper(lambda screen: run_picker(screen, worker, rows, cols, width, screen_height))
+                curses.wrapper(lambda screen: run_picker(screen, worker, rows, cols, width, screen_height, settings))
         finally:
             close_renderer_worker(worker)
         return 0

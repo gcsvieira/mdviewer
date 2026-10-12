@@ -1,10 +1,8 @@
 # Next steps: navigation, folders, and settings
 
-Status: requirements recorded. Implemented so far: global `q` exits, Enter no longer opens files, and document percentage jumps. Other features remain deferred.
+Status: all recorded next steps are implemented, including folder refresh, settings, exclusive keyboard modes, pagination, color selection, and loading feedback.
 
-Implemented: `q` exits from the picker or preview; Left/`h` returns from a preview to the list. Right/`l` opens files; Enter does not.
-
-Percentage jumps are implemented with both number + `G` and number + Enter available until exclusive keyboard modes are introduced.
+Configuration is saved at `~/.config/mdviewer/settings.json`, as explicitly requested by the user. Defaults: Vim mode off, scroll viewing, white foreground.
 
 ## Separate keyboard modes
 
@@ -34,7 +32,7 @@ Show and enable one navigation scheme at a time. Remove the combined arrow/Vim s
 - `0G` is equivalent to `gg`; `0` + Enter is equivalent to Home. `100G` or `100` + Enter jumps to the document bottom.
 - Use the same scale as the preview's displayed percentage: `0%` is the top and `100%` is the furthest bottom position. Keep the jump location and percentage indicator consistent.
 - Keep unprefixed `G` as the bottom shortcut in Vim mode. Percentage jumps apply to document previews, not file-list selection.
-- Scroll jumps round to the nearest pixel in the existing scrollable range. Inputs are integers from 0–100; invalid values show an error without moving the viewport. Backspace edits the number, Escape cancels it, and another navigation key cancels the number while still performing its action. Define page rounding when paginated mode is implemented.
+- Scroll jumps round to the nearest pixel in the existing scrollable range. Inputs are integers from 0–100; invalid values show an error without moving the viewport. Backspace edits the number, Escape cancels it, and another navigation key cancels the number while still performing its action. Paginated jumps snap to the nearest page, with the final page at 100%.
 
 ## Browse folders explicitly
 
@@ -64,16 +62,18 @@ Show a loading bar or progress indicator somewhere while opening/rendering a fil
 
 Do not show a fabricated percentage if the renderer cannot report measurable progress. Decide the placement and progress reporting during implementation. The user has not specified a separate on/off setting for the indicator.
 
-## Details to settle when work resumes
+## Implemented decisions
 
-- Proposed defaults: Vim mode off, scroll navigation, white elements for the existing dark-terminal default.
-- How settings are changed and dismissed, and whether preferences persist between launches.
-- Paging step size and progress display in paginated mode.
-- Parent-folder navigation at the starting folder, folder ordering, and hidden-folder handling.
-- Whether white/black also controls picker/settings text and how callout accents are treated.
+- Defaults: Vim mode off, scroll navigation, white elements.
+- Settings are applied immediately and saved to `~/.config/mdviewer/settings.json`. Right/`l` or Space changes a value; Left/`h`, Escape, or `s` returns to the picker.
+- Pagination prefers paragraph/heading boundaries; oversized blocks split at terminal-row boundaries. Navigation moves one page at a time.
+- Parent navigation stops at the initial folder. Explicit symlinks are followed normally. Folders sort before Markdown files; hidden entries and `node_modules` are excluded.
+- The current folder is rescanned while idle on a 500 ms input timeout; selection is preserved by path.
+- White/black applies to the picker/settings foreground and Markdown text, preserving the terminal background and meaningful accent colors.
+- File opening uses an animated indeterminate bar, because the renderer does not expose measurable progress. `q` cancels rendering and exits cleanly.
 
 ## Keep existing behavior
 
 Retain the background-only persistent renderer, external-editor handoff, resize safety, and quick inline command `mdview file.md`. Implementing these next steps must not introduce renderer windows.
 
-Editing/navigation baseline: `58f129d` on `feat/persistent-terminal-viewer`. With global `q` exit, Enter disabled for opening files, and percentage jumps implemented, 36 tests pass. This file records new requirements and supersedes conflicting keyboard and recursive-picker decisions in the earlier design documents.
+Editing/navigation baseline: `58f129d` on `feat/persistent-terminal-viewer`. All remaining requirements are implemented and 50 tests pass. A real Kitty check covers folder refresh, preference persistence, both keyboard modes, pagination, palette changes, editing, and quitting during loading. This file records new requirements and supersedes conflicting keyboard and recursive-picker decisions in the earlier design documents.
