@@ -103,6 +103,30 @@ class RenderingTests(unittest.TestCase):
 
 
 class RendererWorkerTests(unittest.TestCase):
+    def test_renderer_survives_foreground_interrupt_during_edit(self):
+        script = '''
+import os, signal, tempfile, time
+from pathlib import Path
+import mdview
+with tempfile.TemporaryDirectory() as directory:
+    path = Path(directory) / 'note.md'
+    path.write_text('# Signal test')
+    worker = mdview.start_renderer_worker()
+    request = {'path': str(path), 'width': 640, 'page_height': 400, 'row_height': 20}
+    try:
+        assert mdview.request_render(worker, request)['ok']
+        signal.signal(signal.SIGINT, lambda *_: None)
+        os.killpg(os.getpgrp(), signal.SIGINT)
+        time.sleep(.2)
+        assert mdview.request_render(worker, request)['ok']
+    finally:
+        mdview.close_renderer_worker(worker)
+'''
+        result = subprocess.run([sys.executable, '-c', script],
+                                cwd=Path(mdview.__file__).parent, start_new_session=True,
+                                capture_output=True, text=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_partial_worker_response_respects_timeout_and_stops_worker(self):
         worker = subprocess.Popen(
             [sys.executable, '-c', "import sys,time; sys.stdin.readline(); sys.stdout.write('{\\\"ok\\\":'); sys.stdout.flush(); time.sleep(5)"],

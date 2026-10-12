@@ -71,3 +71,5 @@
 ## Completion
 
 Both keyboard styles work. Editing occupies the existing terminal, restores the original viewer mode, refreshes saved content, preserves selection/scroll position where possible, and leaves no stale image. The persistent renderer survives the editor session; quick output and the resize fix remain working.
+
+Verified: 31 tests pass; Kitty smoke exercised arrows, Home/End, h/l, a terminal-attached editor, resizing during editing, refresh using the same worker, and a real Neovim save. Fresh review found a Ctrl+C propagation bug; the renderer now runs in its own session, with a real process-group interrupt regression test.

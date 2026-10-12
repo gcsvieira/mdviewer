@@ -141,7 +141,7 @@ def start_renderer_worker():
         worker = subprocess.Popen(
             ['xvfb-run', '-a', sys.executable, str(Path(__file__).resolve()), '--renderer-worker'],
             stdin=subprocess.PIPE, stdout=sys.stderr, text=True, bufsize=1,
-            env=renderer_env, pass_fds=(response_write,),
+            env=renderer_env, pass_fds=(response_write,), start_new_session=True,
         )
     except Exception:
         os.close(response_read)
