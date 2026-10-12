@@ -1,4 +1,6 @@
 import tempfile
+import base64
+import io
 import queue
 import subprocess
 import sys
@@ -162,10 +164,41 @@ class RendererWorkerTests(unittest.TestCase):
 
 
 class TerminalNavigationTests(unittest.TestCase):
+    def test_scroll_moves_one_row_and_stops_at_document_edges(self):
+        self.assertEqual(mdview.scroll_offset(0, 'next', 200, 80, 20), 20)
+        self.assertEqual(mdview.scroll_offset(0, 'previous', 200, 80, 20), 0)
+        self.assertEqual(mdview.scroll_offset(110, 'next', 200, 80, 20), 120)
+        self.assertEqual(mdview.scroll_offset(0, 'next', 40, 80, 20), 0)
+
+    def test_scrolling_viewport_preserves_pixels_across_strip_boundaries(self):
+        image = Image.new('RGBA', (20, 200))
+        for y in range(200):
+            image.paste((y, 0, 0, 255), (0, y, 20, y + 1))
+        viewport = mdview.crop_viewport(image, 60, 80)
+        self.assertEqual(viewport.size, (20, 80))
+        self.assertEqual(viewport.getpixel((0, 0)), (60, 0, 0, 255))
+        self.assertEqual(viewport.getpixel((0, 79)), (139, 0, 0, 255))
+
     def test_kitty_clear_escape_sequence_reaches_terminal_stdout(self):
-        with patch('mdview.subprocess.run') as run:
+        output = io.StringIO()
+        with patch('mdview.sys.stdout', output):
             mdview.clear_kitty_images()
-        run.assert_called_once_with(['kitten', 'icat', '--clear'], check=True)
+        self.assertEqual(output.getvalue(), '\x1b_Ga=d,d=A,q=2\x1b\\')
+
+    def test_kitty_image_chunks_preserve_png_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'image.png'
+            data = bytes(range(256)) * 50
+            path.write_bytes(data)
+            output = io.StringIO()
+            with patch('mdview.sys.stdout', output):
+                mdview.display_kitty_image(path)
+            commands = output.getvalue().split('\x1b_G')[1:]
+            chunks = [command.split(';', 1)[1][:-2] for command in commands]
+            self.assertGreater(len(chunks), 1)
+            self.assertTrue(all(len(chunk) <= 4096 for chunk in chunks))
+            self.assertEqual(base64.b64decode(''.join(chunks)), data)
+            self.assertIn('m=0;', commands[-1])
 
     def test_vim_keys_map_to_picker_and_preview_actions(self):
         action = getattr(mdview, 'navigation_action', lambda *_: None)
@@ -191,7 +224,11 @@ class TerminalNavigationTests(unittest.TestCase):
             (root / 'a.markdown').touch()
             (root / 'b.txt').touch()
             (root / 'sub').mkdir()
-            self.assertEqual([p.name for p in mdview.markdown_files(root)], ['a.markdown', 'z.MD'])
+            (root / 'sub' / 'nested.md').touch()
+            (root / '.hidden').mkdir()
+            (root / '.hidden' / 'ignored.md').touch()
+            self.assertEqual([str(p.relative_to(root)) for p in mdview.markdown_files(root)],
+                             ['a.markdown', 'sub/nested.md', 'z.MD'])
 
     def test_returning_from_preview_clears_image_before_picker_redraw(self):
         events = []
@@ -211,24 +248,27 @@ class TerminalNavigationTests(unittest.TestCase):
     def test_picker_displays_rendered_png_for_selected_file(self):
         class Screen:
             def __init__(self):
-                self.keys = iter((13, ord('q'), ord('q')))
+                self.keys = iter((13, ord('j'), ord('q'), ord('q')))
 
             def erase(self): pass
             def clear(self): pass
             def addnstr(self, *args): pass
             def refresh(self): pass
+            def move(self, *args): pass
             def getch(self): return next(self.keys)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'note.md').write_text('# Note', encoding='utf-8')
             image = root / 'strip-00000.png'
+            Image.new('RGBA', (640, 500)).save(image)
             with patch('mdview.Path.cwd', return_value=root), \
-                 patch('mdview.request_render', return_value={'ok': True, 'strips': [str(image)]}), \
-                 patch('mdview.subprocess.run') as run:
+                 patch('mdview.request_render', return_value={'ok': True, 'image': str(image), 'strips': [str(image)]}), \
+                 patch('mdview.clear_kitty_images'), \
+                 patch('mdview.display_kitty_image') as display:
                 mdview.picker(Screen(), object(), 8, 80, 640, 160)
-            calls = [call.args[0] for call in run.call_args_list if call.args[0][1:2] == ['icat']]
-            self.assertEqual(calls[0][-1], str(image))
+            self.assertEqual(display.call_args_list[0].args[0], root / 'viewport.png')
+            self.assertEqual(display.call_count, 2, 'scrolling must redraw the viewport')
 
 if __name__ == '__main__':
     unittest.main()

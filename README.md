@@ -13,7 +13,7 @@ sudo dnf install kitty gtk3 webkit2gtk4.1 xorg-x11-server-Xvfb python3-gobject
 python3 -m pip install -r requirements.txt
 ```
 
-Open the current directory's Markdown picker:
+Open the Markdown picker for the current directory and its subdirectories:
 
 ```sh
 ./mdview
@@ -27,7 +27,11 @@ For one quick inline view that returns to the prompt:
 ./mdview path/to/file.md
 ```
 
-In the picker, use `j`/`k` to move between image pages and `q` to return to the file list. Images use the terminal's current pixel width and stay left-aligned. Long documents break before headings or paragraphs when possible, then split into row-aligned strips.
+In the preview, use `j`/`k` to scroll down/up one terminal row and `q` to return to the file list. The full document is rendered once; scrolling moves a viewport over that image. Images use the terminal's initial pixel width and stay left-aligned. Scroll view is the default; an optional paginated view is deferred.
+
+The file list uses a magenta selection marker, relative paths, and modification times. Hidden directories and `node_modules` are excluded. The renderer forces GTK's X11 backend on the private Xvfb display, even in a Wayland session.
+
+Quick inline output and exports still use image strips. Long documents break before headings or paragraphs when possible, then split into row-aligned strips.
 
 Export image strips without Kitty:
 

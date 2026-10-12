@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Render Markdown through the system WebKitGTK engine and display it in Kitty."""
 import argparse
+import base64
 import curses
 import html
 import json
 import math
+import os
 import re
 import queue
 import shutil
@@ -126,10 +128,25 @@ def split_image(image: Path, directory: Path, max_height: int,
 def start_renderer_worker():
     if not shutil.which('xvfb-run'):
         raise RuntimeError('xvfb-run is required for windowless WebKit rendering')
-    worker = subprocess.Popen(
-        ['xvfb-run', '-a', sys.executable, str(Path(__file__).resolve()), '--renderer-worker'],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
-    )
+    renderer_env = os.environ.copy()
+    renderer_env['GDK_BACKEND'] = 'x11'
+    renderer_env['LIBGL_ALWAYS_SOFTWARE'] = '1'
+    renderer_env.pop('WAYLAND_DISPLAY', None)
+    # Some xvfb-run versions merge stderr into stdout. Keep JSON on its own pipe.
+    response_read, response_write = os.pipe()
+    renderer_env['MDVIEW_RESPONSE_FD'] = str(response_write)
+    try:
+        worker = subprocess.Popen(
+            ['xvfb-run', '-a', sys.executable, str(Path(__file__).resolve()), '--renderer-worker'],
+            stdin=subprocess.PIPE, stdout=sys.stderr, text=True, bufsize=1,
+            env=renderer_env, pass_fds=(response_write,),
+        )
+    except Exception:
+        os.close(response_read)
+        raise
+    finally:
+        os.close(response_write)
+    worker.stdout = os.fdopen(response_read, 'r')
     worker.responses = queue.Queue()
     threading.Thread(target=_read_worker_responses, args=(worker,), daemon=True).start()
     return worker
@@ -163,6 +180,7 @@ def request_render(worker, request: dict, timeout: int = 40) -> dict:
 
 def renderer_worker() -> None:
     """Serve JSON-line Markdown render requests on one private Xvfb display."""
+    protocol_output = os.fdopen(int(os.environ.pop('MDVIEW_RESPONSE_FD')), 'w', buffering=1)
     import gi
     gi.require_version('Gtk', '3.0')
     gi.require_version('Gdk', '3.0')
@@ -216,7 +234,7 @@ def renderer_worker() -> None:
                     surface.write_to_png(str(page))
                     boundaries = json.loads(boundaries_file.read_text(encoding='utf-8'))
                     strips = split_image(page, root, page_height, row_height, boundaries)
-                    finish({'ok': True, 'strips': [str(path) for path in strips]})
+                    finish({'ok': True, 'image': str(page), 'strips': [str(path) for path in strips]})
                 except Exception as error:
                     finish({'ok': False, 'error': str(error)})
 
@@ -248,13 +266,14 @@ def renderer_worker() -> None:
             view.stop_loading()
             view.disconnect_by_func(on_load)
             view.disconnect_by_func(on_failed)
-            print(json.dumps(state['response']), flush=True)
+            print(json.dumps(state['response']), file=protocol_output, flush=True)
         except Exception as error:
-            print(json.dumps({'ok': False, 'error': str(error)}), flush=True)
+            print(json.dumps({'ok': False, 'error': str(error)}), file=protocol_output, flush=True)
 
     if previous is not None:
         previous.cleanup()
     window.destroy()
+    protocol_output.close()
 
 
 def terminal_size() -> tuple[int, int, int, int]:
@@ -268,9 +287,12 @@ def terminal_size() -> tuple[int, int, int, int]:
 
 
 def markdown_files(directory: Path) -> list[Path]:
-    return sorted((path for path in directory.iterdir()
-                   if path.is_file() and path.suffix.lower() in {'.md', '.markdown'}),
-                  key=lambda path: path.name.casefold())
+    files = []
+    for root, directories, names in os.walk(directory):
+        directories[:] = [name for name in directories if not name.startswith('.') and name != 'node_modules']
+        files.extend(Path(root) / name for name in names
+                     if not name.startswith('.') and Path(name).suffix.lower() in {'.md', '.markdown'})
+    return sorted(files, key=lambda path: str(path.relative_to(directory)).casefold())
 
 
 def navigation_action(mode: str, key: str) -> str | None:
@@ -290,7 +312,18 @@ def move_selection(index: int, action: str, count: int) -> int:
 
 
 def clear_kitty_images() -> None:
-    subprocess.run(['kitten', 'icat', '--clear'], check=True)
+    sys.stdout.write('\x1b_Ga=d,d=A,q=2\x1b\\')
+    sys.stdout.flush()
+
+
+def display_kitty_image(image: Path) -> None:
+    data = base64.b64encode(image.read_bytes()).decode('ascii')
+    for start in range(0, len(data), 4096):
+        chunk = data[start:start + 4096]
+        more = int(start + 4096 < len(data))
+        params = 'a=T,f=100,t=d,q=2,z=1,C=1,' if start == 0 else ''
+        sys.stdout.write(f'\x1b_G{params}m={more};{chunk}\x1b\\')
+    sys.stdout.flush()
 
 
 def restore_picker(screen) -> None:
@@ -299,39 +332,75 @@ def restore_picker(screen) -> None:
     screen.refresh()
 
 
-def show_page(screen, image: Path, title: str, page: int, count: int, cols: int, rows: int) -> None:
+def scroll_offset(offset: int, action: str, height: int, viewport_height: int, row_height: int) -> int:
+    delta = row_height if action == 'next' else -row_height
+    return max(0, min(offset + delta, max(0, height - viewport_height)))
+
+
+def crop_viewport(image: Image.Image, offset: int, height: int) -> Image.Image:
+    return image.crop((0, offset, image.width, min(image.height, offset + height)))
+
+
+def modified_ago(path: Path) -> str:
+    seconds = max(0, int(time.time() - path.stat().st_mtime))
+    for unit, size in (('day', 86400), ('hour', 3600), ('minute', 60)):
+        if seconds >= size:
+            count = seconds // size
+            return f'{count} {unit}{"s" if count != 1 else ""} ago'
+    return 'just now'
+
+
+def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge):
     screen.erase()
-    screen.addnstr(0, 0, f' {title}  page {page + 1}/{count}   j/k: page   q: files ', max(1, cols - 1))
+
+    def put(row, column, text, attr=0):
+        if 0 <= row < rows and column < cols - 1:
+            screen.addnstr(row, column, text, cols - column - 1, attr)
+
+    left = 3 if cols > 12 else 1
+    put(1, left, ' MDVIEW ', badge | curses.A_BOLD)
+    put(3, left, f'{len(files)} document{"s" if len(files) != 1 else ""}', curses.A_DIM)
+    start, spacing = (5, 3) if rows >= 12 else (3, 2)
+    available = max(1, (rows - 2 - start) // spacing)
+    first = max(0, selected - available + 1)
+    for index in range(first, min(len(files), first + available)):
+        row = start + (index - first) * spacing
+        active = index == selected
+        attr = accent | curses.A_BOLD if active else 0
+        if active:
+            put(row, left - 2, '│', accent)
+            put(row + 1, left - 2, '│', accent)
+        put(row, left, str(files[index].relative_to(root)), attr)
+        put(row + 1, left, modified_ago(files[index]), accent if active else curses.A_DIM)
+    if not files:
+        put(start, left, 'No Markdown files found.', curses.A_DIM)
+    put(rows - 2, left, error or 'j/k move · Enter open · q quit', curses.A_DIM)
     screen.refresh()
-    subprocess.run([
-        'kitten', 'icat', '--align=left', '--background=none', '--fit=none',
-        '--transfer-mode=stream', '--stdin=no', '--z-index=-1',
-        '--place', f'{cols}x{rows - 1}@0x1', str(image),
-    ], check=True)
 
 
-def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int) -> None:
-    files = markdown_files(Path.cwd())
+def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, cols: int, rows: int) -> None:
+    screen.erase()
+    screen.addnstr(0, 0, f' {title} ', max(1, cols - 1), curses.A_DIM)
+    percent = round(offset / maximum * 100) if maximum else 100
+    screen.addnstr(rows - 1, 0, f' j/k scroll · q files   {percent}% ', max(1, cols - 1), curses.A_DIM)
+    screen.move(1, 0)
+    screen.refresh()
+    display_kitty_image(image)
+
+
+def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
+           accent: int = 0, badge: int = curses.A_REVERSE) -> None:
+    root = Path.cwd()
+    files = markdown_files(root)
     selected = 0
     error = None
     row_height = max(1, screen_height // rows)
-    page_height = row_height * max(1, rows - 1)
-    mode, pages, current_page = 'picker', [], 0
+    page_height = row_height * max(1, rows - 2)
+    mode, image, offset, redraw = 'picker', None, 0, True
 
     while True:
         if mode == 'picker':
-            screen.erase()
-            screen.addnstr(0, 0, ' mdview   j/k: move   Enter: open   q: quit ', max(1, cols - 1))
-            available = max(0, rows - 2)
-            first = max(0, min(selected - available + 1, len(files) - available))
-            for row, path in enumerate(files[first:first + available], start=1):
-                attr = curses.A_REVERSE if first + row - 1 == selected else 0
-                screen.addnstr(row, 0, path.name, max(1, cols - 1), attr)
-            if not files:
-                screen.addnstr(2, 0, 'No Markdown files in this directory.', max(1, cols - 1))
-            if error:
-                screen.addnstr(rows - 1, 0, error, max(1, cols - 1))
-            screen.refresh()
+            draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
             key = screen.getch()
             key_text = 'ENTER' if key in (10, 13, curses.KEY_ENTER) else chr(key) if 0 <= key < 256 else ''
             action = navigation_action('picker', key_text)
@@ -347,25 +416,44 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int)
                     })
                     if not response.get('ok'):
                         raise RuntimeError(response.get('error', 'Rendering failed'))
-                    pages = [Path(path) for path in response['strips']]
-                    current_page = 0
+                    image_path = Path(response['image'])
+                    with Image.open(image_path) as source:
+                        image = source.convert('RGBA')
+                    viewport = image_path.parent / 'viewport.png'
+                    offset, redraw = 0, True
                     mode, error = 'preview', None
                 except (OSError, RuntimeError, ValueError, KeyError) as exception:
                     error = str(exception)
         else:
-            show_page(screen, pages[current_page], files[selected].name, current_page, len(pages), cols, rows)
+            if redraw:
+                crop_viewport(image, offset, page_height).save(viewport)
+                clear_kitty_images()
+                show_viewport(screen, viewport, str(files[selected].relative_to(root)), offset,
+                              max(0, image.height - page_height), cols, rows)
+                redraw = False
             key = screen.getch()
             key_text = chr(key) if 0 <= key < 256 else ''
             action = navigation_action('preview', key_text)
             if action == 'back':
                 restore_picker(screen)
                 mode = 'picker'
-            elif action == 'next' and current_page + 1 < len(pages):
-                clear_kitty_images()
-                current_page += 1
-            elif action == 'previous' and current_page > 0:
-                clear_kitty_images()
-                current_page -= 1
+            elif action in ('next', 'previous'):
+                new_offset = scroll_offset(offset, action, image.height, page_height, row_height)
+                redraw = new_offset != offset
+                offset = new_offset
+
+
+def run_picker(screen, worker, rows, cols, width, screen_height):
+    curses.curs_set(0)
+    accent, badge = 0, curses.A_REVERSE
+    if curses.has_colors():
+        curses.start_color()
+        curses.use_default_colors()
+        magenta = 213 if curses.COLORS >= 256 else curses.COLOR_MAGENTA
+        curses.init_pair(1, magenta, -1)
+        curses.init_pair(2, curses.COLOR_WHITE, magenta)
+        accent, badge = curses.color_pair(1), curses.color_pair(2)
+    picker(screen, worker, rows, cols, width, screen_height, accent, badge)
 
 
 def close_renderer_worker(worker) -> None:
@@ -432,7 +520,7 @@ def main() -> int:
                         *map(str, strips),
                     ], check=True)
             else:
-                curses.wrapper(lambda screen: picker(screen, worker, rows, cols, width, screen_height))
+                curses.wrapper(lambda screen: run_picker(screen, worker, rows, cols, width, screen_height))
         finally:
             close_renderer_worker(worker)
         return 0
