@@ -164,6 +164,28 @@ class RendererWorkerTests(unittest.TestCase):
 
 
 class TerminalNavigationTests(unittest.TestCase):
+    def test_arrow_keys_match_vim_actions(self):
+        for mode in ('picker', 'preview'):
+            for code, letter in ((mdview.curses.KEY_UP, 'k'), (mdview.curses.KEY_DOWN, 'j')):
+                self.assertEqual(mdview.navigation_action(mode, mdview.key_text(code)),
+                                 mdview.navigation_action(mode, letter))
+        for key in ('RIGHT', 'l'):
+            self.assertEqual(mdview.navigation_action('picker', key), 'open')
+            self.assertIsNone(mdview.navigation_action('preview', key))
+        for key in ('LEFT', 'h'):
+            self.assertEqual(mdview.navigation_action('preview', key), 'back')
+            self.assertIsNone(mdview.navigation_action('picker', key))
+        self.assertEqual(mdview.key_text(mdview.curses.KEY_RIGHT), 'RIGHT')
+        self.assertEqual(mdview.key_text(mdview.curses.KEY_LEFT), 'LEFT')
+        self.assertEqual(mdview.key_text(mdview.curses.KEY_ENTER), 'ENTER')
+        self.assertEqual(mdview.key_text(ord('e')), 'e')
+        self.assertEqual(mdview.key_text(mdview.curses.KEY_SR), '')
+
+    def test_home_end_jump_to_edges(self):
+        for mode in ('picker', 'preview'):
+            self.assertEqual(mdview.navigation_action(mode, mdview.key_text(mdview.curses.KEY_HOME)), 'top')
+            self.assertEqual(mdview.navigation_action(mode, mdview.key_text(mdview.curses.KEY_END)), 'bottom')
+
     def test_resize_keeps_picker_and_preview_drawing_inside_current_bounds(self):
         class Screen:
             def __init__(self):
@@ -216,6 +238,9 @@ class TerminalNavigationTests(unittest.TestCase):
         self.assertEqual(mdview.navigation_input('picker', 'j', True), ('down', False))
         self.assertEqual(mdview.navigation_input('preview', 'q', True), ('back', False))
         self.assertEqual(mdview.navigation_input('preview', 'G', True), ('bottom', False))
+        self.assertEqual(mdview.navigation_input('picker', 'DOWN', True), ('down', False))
+        for mode in ('picker', 'preview'):
+            self.assertEqual(mdview.navigation_input(mode, 'e', True), ('edit', False))
 
     def test_scrolling_viewport_preserves_pixels_across_strip_boundaries(self):
         image = Image.new('RGBA', (20, 200))
@@ -301,7 +326,8 @@ class TerminalNavigationTests(unittest.TestCase):
     def test_picker_displays_rendered_png_for_selected_file(self):
         class Screen:
             def __init__(self):
-                self.keys = iter((13, ord('j'), ord('G'), ord('g'), ord('g'), ord('q'), ord('q')))
+                self.keys = iter((mdview.curses.KEY_RIGHT, mdview.curses.KEY_DOWN,
+                                  mdview.curses.KEY_END, mdview.curses.KEY_HOME, ord('h'), ord('q')))
 
             def erase(self): pass
             def clear(self): pass

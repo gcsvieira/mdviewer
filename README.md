@@ -19,9 +19,9 @@ Open the Markdown picker for the current directory and its subdirectories:
 ./mdview
 ```
 
-Use `j` and `k` to choose a file, Enter to preview it, and `q` to return to the list. Press `q` in the list to return to the shell. The WebKit renderer stays alive while you browse and runs on a private Xvfb display, so no window appears on your desktop.
+Use Up/Down or `j`/`k` to choose a file. Enter, Right, or `l` opens it; Left, `h`, or `q` returns to the list. Press `q` in the list to return to the shell. The WebKit renderer stays alive while you browse and runs on a private Xvfb display, so no window appears on your desktop.
 
-Use `gg` to jump to the first file or the top of the preview, and `G` to jump to the last file or the bottom of the preview.
+Home or `gg` jumps to the first file or the top of the preview; End or `G` jumps to the last file or the bottom of the preview.
 
 For one quick inline view that returns to the prompt:
 
@@ -29,7 +29,7 @@ For one quick inline view that returns to the prompt:
 ./mdview path/to/file.md
 ```
 
-In the preview, use `j`/`k` to scroll down/up one terminal row and `q` to return to the file list. The full document is rendered once; scrolling moves a viewport over that image. Images use the terminal's initial pixel width and stay left-aligned. Scroll view is the default; an optional paginated view is deferred.
+In the preview, use Down/Up or `j`/`k` to scroll down/up one terminal row and Left, `h`, or `q` to return to the file list. The full document is rendered once; scrolling moves a viewport over that image. Images use the terminal's initial pixel width and stay left-aligned. Scroll view is the default; an optional paginated view is deferred.
 
 Resizing adjusts the menu and preview height without rerendering the document. Its original layout width is retained.
 

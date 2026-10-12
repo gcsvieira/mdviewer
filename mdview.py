@@ -295,12 +295,23 @@ def markdown_files(directory: Path) -> list[Path]:
     return sorted(files, key=lambda path: str(path.relative_to(directory)).casefold())
 
 
+def key_text(key: int) -> str:
+    special = {curses.KEY_UP: 'UP', curses.KEY_DOWN: 'DOWN',
+               curses.KEY_LEFT: 'LEFT', curses.KEY_RIGHT: 'RIGHT',
+               curses.KEY_HOME: 'HOME', curses.KEY_END: 'END', curses.KEY_ENTER: 'ENTER'}
+    return special.get(key, chr(key) if 0 <= key < 256 else '')
+
+
 def navigation_action(mode: str, key: str) -> str | None:
+    key = {'UP': 'k', 'DOWN': 'j', 'HOME': 'gg', 'END': 'G',
+           'RIGHT': 'l', 'LEFT': 'h'}.get(key, key)
+    if key == 'e':
+        return 'edit'
     if key in ('gg', 'G'):
         return 'top' if key == 'gg' else 'bottom'
     if mode == 'picker':
-        return {'j': 'down', 'k': 'up', '\n': 'open', '\r': 'open', 'ENTER': 'open', 'q': 'quit'}.get(key)
-    return {'j': 'next', 'k': 'previous', 'q': 'back'}.get(key)
+        return {'j': 'down', 'k': 'up', 'l': 'open', '\n': 'open', '\r': 'open', 'ENTER': 'open', 'q': 'quit'}.get(key)
+    return {'j': 'next', 'k': 'previous', 'h': 'back', 'q': 'back'}.get(key)
 
 
 def navigation_input(mode: str, key: str, pending_g: bool) -> tuple[str | None, bool]:
@@ -395,7 +406,7 @@ def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
         put(row + 1, left, modified_ago(files[index]), accent if active else curses.A_DIM)
     if not files:
         put(start, left, 'No Markdown files found.', curses.A_DIM)
-    put(rows - 2, left, error or 'j/k move · gg/G top/bottom · Enter open · q quit', curses.A_DIM)
+    put(rows - 2, left, error or '↑/↓ j/k move · Home/End gg/G · Enter/→/l open · q quit', curses.A_DIM)
     screen.refresh()
 
 
@@ -403,7 +414,7 @@ def show_viewport(screen, image: Path, title: str, offset: int, maximum: int, co
     screen.erase()
     put_text(screen, 0, 0, f' {title} ', curses.A_DIM)
     percent = round(offset / maximum * 100) if maximum else 100
-    put_text(screen, rows - 1, 0, f' j/k scroll · gg/G top/bottom · q files   {percent}% ', curses.A_DIM)
+    put_text(screen, rows - 1, 0, f' ↑/↓ j/k scroll · Home/End gg/G · ←/h/q files   {percent}% ', curses.A_DIM)
     if rows < 3:
         screen.refresh()
         return
@@ -437,8 +448,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
         if mode == 'picker':
             draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
             key = screen.getch()
-            key_text = 'ENTER' if key in (10, 13, curses.KEY_ENTER) else chr(key) if 0 <= key < 256 else ''
-            action, pending_g = navigation_input('picker', key_text, pending_g)
+            action, pending_g = navigation_input('picker', key_text(key), pending_g)
             if action == 'quit':
                 return
             if action in ('up', 'down', 'top', 'bottom'):
@@ -467,8 +477,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int,
                               max(0, image.height - page_height), cols, rows)
                 redraw = False
             key = screen.getch()
-            key_text = chr(key) if 0 <= key < 256 else ''
-            action, pending_g = navigation_input('preview', key_text, pending_g)
+            action, pending_g = navigation_input('preview', key_text(key), pending_g)
             if action == 'back':
                 restore_picker(screen)
                 mode = 'picker'
