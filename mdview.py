@@ -6,12 +6,14 @@ import html
 import json
 import math
 import re
-import select
+import queue
 import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -124,10 +126,19 @@ def split_image(image: Path, directory: Path, max_height: int,
 def start_renderer_worker():
     if not shutil.which('xvfb-run'):
         raise RuntimeError('xvfb-run is required for windowless WebKit rendering')
-    return subprocess.Popen(
+    worker = subprocess.Popen(
         ['xvfb-run', '-a', sys.executable, str(Path(__file__).resolve()), '--renderer-worker'],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
     )
+    worker.responses = queue.Queue()
+    threading.Thread(target=_read_worker_responses, args=(worker,), daemon=True).start()
+    return worker
+
+
+def _read_worker_responses(worker) -> None:
+    for line in worker.stdout:
+        worker.responses.put(line)
+    worker.responses.put(None)
 
 
 def request_render(worker, request: dict, timeout: int = 40) -> dict:
@@ -135,10 +146,16 @@ def request_render(worker, request: dict, timeout: int = 40) -> dict:
         raise RuntimeError('WebKit renderer worker has stopped')
     worker.stdin.write(json.dumps(request) + '\n')
     worker.stdin.flush()
-    ready, _, _ = select.select([worker.stdout], [], [], timeout)
-    if not ready:
+    try:
+        line = worker.responses.get(timeout=timeout)
+    except queue.Empty:
+        worker.terminate()
+        try:
+            worker.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            worker.kill()
+            worker.wait()
         raise RuntimeError(f'WebKit renderer timed out after {timeout} seconds')
-    line = worker.stdout.readline()
     if not line:
         raise RuntimeError('WebKit renderer stopped before returning a result')
     return json.loads(line)
@@ -273,7 +290,7 @@ def move_selection(index: int, action: str, count: int) -> int:
 
 
 def clear_kitty_images() -> None:
-    subprocess.run(['kitten', 'icat', '--clear'], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(['kitten', 'icat', '--clear'], check=True)
 
 
 def restore_picker(screen) -> None:
@@ -282,9 +299,9 @@ def restore_picker(screen) -> None:
     screen.refresh()
 
 
-def show_page(screen, image: Path, page: int, count: int, cols: int, rows: int) -> None:
+def show_page(screen, image: Path, title: str, page: int, count: int, cols: int, rows: int) -> None:
     screen.erase()
-    screen.addnstr(0, 0, f' {image.name}  page {page + 1}/{count}   j/k: page   q: files ', max(1, cols - 1))
+    screen.addnstr(0, 0, f' {title}  page {page + 1}/{count}   j/k: page   q: files ', max(1, cols - 1))
     screen.refresh()
     subprocess.run([
         'kitten', 'icat', '--align=left', '--background=none', '--fit=none',
@@ -336,7 +353,7 @@ def picker(screen, worker, rows: int, cols: int, width: int, screen_height: int)
                 except (OSError, RuntimeError, ValueError, KeyError) as exception:
                     error = str(exception)
         else:
-            show_page(screen, files[selected], current_page, len(pages), cols, rows)
+            show_page(screen, pages[current_page], files[selected].name, current_page, len(pages), cols, rows)
             key = screen.getch()
             key_text = chr(key) if 0 <= key < 256 else ''
             action = navigation_action('preview', key_text)

@@ -1,4 +1,9 @@
 import tempfile
+import queue
+import subprocess
+import sys
+import threading
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -96,6 +101,26 @@ class RenderingTests(unittest.TestCase):
 
 
 class RendererWorkerTests(unittest.TestCase):
+    def test_partial_worker_response_respects_timeout_and_stops_worker(self):
+        worker = subprocess.Popen(
+            [sys.executable, '-c', "import sys,time; sys.stdin.readline(); sys.stdout.write('{\\\"ok\\\":'); sys.stdout.flush(); time.sleep(5)"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+        )
+        worker.responses = queue.Queue()
+        threading.Thread(target=mdview._read_worker_responses, args=(worker,), daemon=True).start()
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'timed out'):
+                mdview.request_render(worker, {'path': 'unused'}, timeout=0.1)
+            self.assertLess(time.monotonic() - started, 1.5)
+            self.assertIsNotNone(worker.poll())
+        finally:
+            if worker.poll() is None:
+                worker.kill()
+            worker.wait()
+            worker.stdin.close()
+            worker.stdout.close()
+
     def test_one_worker_renders_multiple_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -137,6 +162,11 @@ class RendererWorkerTests(unittest.TestCase):
 
 
 class TerminalNavigationTests(unittest.TestCase):
+    def test_kitty_clear_escape_sequence_reaches_terminal_stdout(self):
+        with patch('mdview.subprocess.run') as run:
+            mdview.clear_kitty_images()
+        run.assert_called_once_with(['kitten', 'icat', '--clear'], check=True)
+
     def test_vim_keys_map_to_picker_and_preview_actions(self):
         action = getattr(mdview, 'navigation_action', lambda *_: None)
         self.assertEqual(action('picker', 'j'), 'down')
@@ -177,6 +207,28 @@ class TerminalNavigationTests(unittest.TestCase):
         with patch('mdview.clear_kitty_images', side_effect=lambda: events.append('kitty-clear'), create=True):
             restore(Screen())
         self.assertEqual(events, ['kitty-clear', 'screen-clear', 'screen-refresh'])
+
+    def test_picker_displays_rendered_png_for_selected_file(self):
+        class Screen:
+            def __init__(self):
+                self.keys = iter((13, ord('q'), ord('q')))
+
+            def erase(self): pass
+            def clear(self): pass
+            def addnstr(self, *args): pass
+            def refresh(self): pass
+            def getch(self): return next(self.keys)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'note.md').write_text('# Note', encoding='utf-8')
+            image = root / 'strip-00000.png'
+            with patch('mdview.Path.cwd', return_value=root), \
+                 patch('mdview.request_render', return_value={'ok': True, 'strips': [str(image)]}), \
+                 patch('mdview.subprocess.run') as run:
+                mdview.picker(Screen(), object(), 8, 80, 640, 160)
+            calls = [call.args[0] for call in run.call_args_list if call.args[0][1:2] == ['icat']]
+            self.assertEqual(calls[0][-1], str(image))
 
 if __name__ == '__main__':
     unittest.main()

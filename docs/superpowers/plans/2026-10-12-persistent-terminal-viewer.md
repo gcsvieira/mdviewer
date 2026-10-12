@@ -77,6 +77,8 @@
 
 - [x] Add a failing test for picker selection movement and menu/viewer/quit key transitions.
 - [x] Add a failing test that returning from preview clears the image before the picker redraws.
+- [x] Add a failing test that the picker passes the rendered PNG strip to Kitty.
+- [x] Add failing tests for Kitty clear output and a partial renderer response timeout.
 - [x] Run the focused UI tests; confirm they fail before the state transitions are implemented.
 - [x] Implement the menu and preview in curses on the current terminal; launch and reuse the worker in interactive mode, draw one left-aligned Kitty image page at a time, clear it on return, and terminate the worker on quit. Keep the existing one-file quick view behavior.
 - [x] Update `README.md` with picker keys and both launch modes.
