@@ -215,7 +215,7 @@ class TerminalNavigationTests(unittest.TestCase):
             def __init__(self):
                 self.size = (24, 100)
                 self.events = iter(((mdview.curses.KEY_RESIZE, (6, 20)),
-                                    (13, None), (mdview.curses.KEY_RESIZE, (2, 8)),
+                                    (mdview.curses.KEY_RIGHT, None), (mdview.curses.KEY_RESIZE, (2, 8)),
                                     (ord('h'), None), (mdview.curses.KEY_RESIZE, (24, 100)),
                                     (ord('q'), None)))
 
@@ -300,8 +300,8 @@ class TerminalNavigationTests(unittest.TestCase):
         action = getattr(mdview, 'navigation_action', lambda *_: None)
         self.assertEqual(action('picker', 'j'), 'down')
         self.assertEqual(action('picker', 'k'), 'up')
-        self.assertEqual(action('picker', '\n'), 'open')
-        self.assertEqual(action('picker', 'ENTER'), 'open')
+        for key in ('\n', '\r', 'ENTER'):
+            self.assertIsNone(action('picker', key))
         self.assertEqual(action('picker', 'q'), 'quit')
         self.assertEqual(action('preview', 'j'), 'next')
         self.assertEqual(action('preview', 'k'), 'previous')

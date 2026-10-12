@@ -312,7 +312,7 @@ def navigation_action(mode: str, key: str) -> str | None:
     if key in ('gg', 'G'):
         return 'top' if key == 'gg' else 'bottom'
     if mode == 'picker':
-        return {'j': 'down', 'k': 'up', 'l': 'open', '\n': 'open', '\r': 'open', 'ENTER': 'open', 'q': 'quit'}.get(key)
+        return {'j': 'down', 'k': 'up', 'l': 'open', 'q': 'quit'}.get(key)
     return {'j': 'next', 'k': 'previous', 'h': 'back', 'q': 'quit'}.get(key)
 
 
@@ -461,7 +461,7 @@ def draw_picker(screen, files, selected, root, rows, cols, error, accent, badge)
         put(row + 1, left, modified_ago(files[index]), accent if active else curses.A_DIM)
     if not files:
         put(start, left, 'No Markdown files found.', curses.A_DIM)
-    put(rows - 2, left, error or '↑/↓ j/k move · Home/End gg/G · Enter/→/l open · e edit · q quit', curses.A_DIM)
+    put(rows - 2, left, error or '↑/↓ j/k move · Home/End gg/G · →/l open · e edit · q quit', curses.A_DIM)
     screen.refresh()
 
 

@@ -111,6 +111,12 @@ class EditorPickerTests(unittest.TestCase):
     def run_picker(self, screen):
         mdview.picker(screen, self.worker, 8, 80, 640, 160)
 
+    def test_enter_does_not_open_selected_file(self):
+        for key in (10, 13, mdview.curses.KEY_ENTER):
+            with self.subTest(key=key), patch('mdview.request_render') as render:
+                self.run_picker(Screen((key, ord('q'))))
+                render.assert_not_called()
+
     def test_q_exits_directly_from_preview_and_clears_image(self):
         with patch('mdview.request_render', return_value={'ok': True, 'image': str(self.page)}), \
              patch('mdview.restore_picker') as restore, patch('mdview.clear_kitty_images') as clear:

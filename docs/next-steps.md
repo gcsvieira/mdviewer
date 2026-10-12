@@ -1,8 +1,8 @@
 # Next steps: navigation, folders, and settings
 
-Status: requirements recorded. The user subsequently authorized implementing just one feature: global `q` exits. Other features remain deferred.
+Status: requirements recorded. Implemented so far: global `q` exits, and Enter no longer opens files. Other features remain deferred.
 
-Implemented: `q` exits from the picker or preview; Left/`h` returns from a preview to the list.
+Implemented: `q` exits from the picker or preview; Left/`h` returns from a preview to the list. Right/`l` opens files; Enter does not.
 
 ## Separate keyboard modes
 
@@ -74,4 +74,4 @@ Do not show a fabricated percentage if the renderer cannot report measurable pro
 
 Retain the background-only persistent renderer, external-editor handoff, resize safety, and quick inline command `mdview file.md`. Implementing these next steps must not introduce renderer windows.
 
-Editing/navigation baseline: `58f129d` on `feat/persistent-terminal-viewer`. With global `q` exit implemented, 32 tests pass. This file records new requirements and supersedes conflicting keyboard and recursive-picker decisions in the earlier design documents.
+Editing/navigation baseline: `58f129d` on `feat/persistent-terminal-viewer`. With global `q` exit and Enter disabled for opening files, 33 tests pass. This file records new requirements and supersedes conflicting keyboard and recursive-picker decisions in the earlier design documents.

@@ -19,7 +19,7 @@ Open the Markdown picker for the current directory and its subdirectories:
 ./mdview
 ```
 
-Use Up/Down or `j`/`k` to choose a file. Enter, Right, or `l` opens it; Left or `h` returns to the list. Press `q` in either screen to exit to the shell. The WebKit renderer stays alive while you browse and runs on a private Xvfb display, so no window appears on your desktop.
+Use Up/Down or `j`/`k` to choose a file. Right or `l` opens it; Left or `h` returns to the list. Enter does not open files. Press `q` in either screen to exit to the shell. The WebKit renderer stays alive while you browse and runs on a private Xvfb display, so no window appears on your desktop.
 
 Home or `gg` jumps to the first file or the top of the preview; End or `G` jumps to the last file or the bottom of the preview.
 
